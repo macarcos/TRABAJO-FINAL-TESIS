@@ -40,7 +40,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="p-6 flex items-center gap-3 border-b border-white/10">
         <div className="bg-white p-2 rounded-lg text-unemi-primary font-bold shadow-md">UA</div>
-        <h1 className="text-xl font-bold tracking-wide">UniAccess</h1>
+        <h1 className="text-xl font-bold tracking-wide">Uniacces</h1>
       </div>
       
       {/* Navegación */}

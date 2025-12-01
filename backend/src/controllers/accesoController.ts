@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import { db } from '../config/db';
 
+// ============================================
 // 1. REGISTRAR UN ACCESO (Facial, RFID o App)
+// ============================================
 export const registrarAcceso = async (req: Request, res: Response) => {
-  const { persona_id, metodo, fecha } = req.body; // ✅ AGREGADO "fecha"
+  const { persona_id, metodo, fecha } = req.body; 
   
   try {
     // ✅ VALIDACIONES
@@ -44,15 +46,13 @@ export const registrarAcceso = async (req: Request, res: Response) => {
       });
     }
 
-    // ✅ REGISTRAR ACCESO CON FECHA DEL FRONTEND (SI SE ENVÍA)
+    // ✅ REGISTRAR ACCESO
     if (fecha) {
-      // Si el frontend envía la fecha, usarla
       await db.execute({
         sql: "INSERT INTO accesos (persona_id, metodo, fecha) VALUES (?, ?, ?)",
         args: [persona_id, metodo, fecha]
       });
     } else {
-      // Si no, usar CURRENT_TIMESTAMP
       await db.execute({
         sql: "INSERT INTO accesos (persona_id, metodo) VALUES (?, ?)",
         args: [persona_id, metodo]
@@ -75,7 +75,9 @@ export const registrarAcceso = async (req: Request, res: Response) => {
   }
 };
 
-// 2. OBTENER ÚLTIMOS 10 ACCESOS (Para el Monitor en Vivo)
+// ============================================
+// 2. OBTENER ÚLTIMOS 10 ACCESOS
+// ============================================
 export const obtenerUltimosAccesos = async (req: Request, res: Response) => {
   try {
     const result = await db.execute(`
@@ -106,7 +108,9 @@ export const obtenerUltimosAccesos = async (req: Request, res: Response) => {
   }
 };
 
-// 3. OBTENER HISTORIAL COMPLETO (Para la Lista de Accesos)
+// ============================================
+// 3. OBTENER HISTORIAL COMPLETO
+// ============================================
 export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
   try {
     const result = await db.execute(`
@@ -139,14 +143,14 @@ export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
   }
 };
 
-// 4. BORRAR TODO EL HISTORIAL (Solo Admin)
+// ============================================
+// 4. BORRAR HISTORIAL
+// ============================================
 export const borrarHistorial = async (req: Request, res: Response) => {
   try {
-    // ✅ CONTAR REGISTROS ANTES DE BORRAR
     const conteo = await db.execute('SELECT COUNT(*) as total FROM accesos');
     const totalRegistros = (conteo.rows[0] as any).total;
 
-    // ✅ BORRAR
     await db.execute("DELETE FROM accesos");
 
     res.json({ 
@@ -162,63 +166,36 @@ export const borrarHistorial = async (req: Request, res: Response) => {
 };
 
 // ============================================
-// ✅ NUEVAS FUNCIONES PARA SISTEMA DE ACCESO
+// 5. VERIFICAR ACCESO POR RFID
 // ============================================
-
-// 5. VERIFICAR ACCESO POR RFID (Desde Arduino)
 export const verificarAccesoPorRFID = async (req: Request, res: Response) => {
   try {
     const { rfid_code } = req.body;
 
     if (!rfid_code) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Se requiere el código RFID' 
-      });
+      return res.status(400).json({ success: false, error: 'Se requiere el código RFID' });
     }
 
-    // ✅ BUSCAR PERSONA POR RFID
     const resultado = await db.execute({
-      sql: `
-        SELECT 
-          id,
-          primer_nombre,
-          primer_apellido,
-          tipo_persona,
-          foto_url,
-          estado
-        FROM personas
-        WHERE rfid_code = ?
-      `,
+      sql: `SELECT id, primer_nombre, primer_apellido, tipo_persona, foto_url, estado FROM personas WHERE rfid_code = ?`,
       args: [rfid_code]
     });
 
     if (resultado.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Tarjeta RFID no registrada',
-        acceso_autorizado: false
-      });
+      return res.status(404).json({ success: false, error: 'Tarjeta RFID no registrada', acceso_autorizado: false });
     }
 
     const persona = resultado.rows[0] as any;
 
-    // ✅ VERIFICAR SI ESTÁ ACTIVO
     if (persona.estado !== 'Activo') {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Usuario inactivo',
-        acceso_autorizado: false
-      });
+      return res.status(403).json({ success: false, error: 'Usuario inactivo', acceso_autorizado: false });
     }
 
-    // ✅ REGISTRAR EL ACCESO
     await db.execute({
       sql: "INSERT INTO accesos (persona_id, metodo) VALUES (?, 'RFID Física')",
       args: [persona.id]
     });
 
-    // ✅ RESPUESTA EXITOSA
     res.json({
       success: true,
       acceso_autorizado: true,
@@ -233,50 +210,28 @@ export const verificarAccesoPorRFID = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('❌ Error verificando acceso RFID:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error al verificar acceso' 
-    });
+    res.status(500).json({ success: false, error: 'Error al verificar acceso' });
   }
 };
 
-// 6. OBTENER ESTADÍSTICAS DE ACCESOS
+// ============================================
+// 6. OBTENER ESTADÍSTICAS SIMPLES
+// ============================================
 export const obtenerEstadisticas = async (req: Request, res: Response) => {
   try {
-    // Total de accesos hoy
-    const hoy = await db.execute(`
-      SELECT COUNT(*) as total
-      FROM accesos
-      WHERE DATE(fecha) = DATE('now')
-    `);
-
-    // Accesos por método hoy
+    const hoy = await db.execute(`SELECT COUNT(*) as total FROM accesos WHERE DATE(fecha) = DATE('now')`);
+    
     const porMetodoHoy = await db.execute(`
-      SELECT 
-        metodo,
-        COUNT(*) as cantidad
-      FROM accesos
-      WHERE DATE(fecha) = DATE('now')
-      GROUP BY metodo
+      SELECT metodo, COUNT(*) as cantidad FROM accesos WHERE DATE(fecha) = DATE('now') GROUP BY metodo
     `);
 
-    // Accesos por tipo de persona hoy
     const porTipoHoy = await db.execute(`
-      SELECT 
-        p.tipo_persona,
-        COUNT(*) as cantidad
-      FROM accesos a
-      INNER JOIN personas p ON a.persona_id = p.id
-      WHERE DATE(a.fecha) = DATE('now')
-      GROUP BY p.tipo_persona
+      SELECT p.tipo_persona, COUNT(*) as cantidad 
+      FROM accesos a INNER JOIN personas p ON a.persona_id = p.id 
+      WHERE DATE(a.fecha) = DATE('now') GROUP BY p.tipo_persona
     `);
 
-    // Total de accesos en el mes
-    const mes = await db.execute(`
-      SELECT COUNT(*) as total
-      FROM accesos
-      WHERE strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')
-    `);
+    const mes = await db.execute(`SELECT COUNT(*) as total FROM accesos WHERE strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')`);
 
     res.json({
       success: true,
@@ -286,84 +241,150 @@ export const obtenerEstadisticas = async (req: Request, res: Response) => {
           por_metodo: porMetodoHoy.rows,
           por_tipo_persona: porTipoHoy.rows
         },
-        mes: {
-          total: (mes.rows[0] as any).total
-        }
+        mes: { total: (mes.rows[0] as any).total }
       }
     });
 
   } catch (error: any) {
     console.error('❌ Error obteniendo estadísticas:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error al obtener estadísticas' 
-    });
+    res.status(500).json({ success: false, error: 'Error al obtener estadísticas' });
   }
 };
 
-
-
+// ==========================================================
+// 7. OBTENER GRÁFICOS (Semanal y Por Hora)
+// ==========================================================
 export const obtenerGraficos = async (req: Request, res: Response) => {
   try {
-    // 1. CONTADORES POR ROL
-    const total = await db.execute("SELECT COUNT(*) as c FROM personas WHERE tipo_persona != 'Admin'");
-    
-    // Usamos 'now' y 'localtime' para asegurar que SQLite use la hora del servidor
-    const accesosHoy = await db.execute("SELECT COUNT(*) as c FROM accesos WHERE date(fecha) = date('now', 'localtime')");
-    
-    const estudiantes = await db.execute("SELECT COUNT(*) as c FROM personas WHERE tipo_persona = 'Estudiante' AND estado = 'Activo'");
-    const docentes = await db.execute("SELECT COUNT(*) as c FROM personas WHERE tipo_persona = 'Docente' AND estado = 'Activo'");
-    const administrativos = await db.execute("SELECT COUNT(*) as c FROM personas WHERE tipo_persona = 'Administrativo' AND estado = 'Activo'");
-    const general = await db.execute("SELECT COUNT(*) as c FROM personas WHERE tipo_persona = 'General' AND estado = 'Activo'");
+    // ✅ TIPADO SEGURO: Convertimos req.query a string para evitar errores de TS
+    const fechaInicio = req.query.fechaInicio as string | undefined;
+    const fechaFin = req.query.fechaFin as string | undefined;
+    const horaInicio = req.query.horaInicio as string | undefined;
+    const horaFin = req.query.horaFin as string | undefined;
+    const tipoPersona = req.query.tipoPersona as string | undefined;
 
-    // 2. ÚLTIMOS MOVIMIENTOS
+    // ✅ CONSTRUIR CONDICIONES WHERE DINÁMICAS (BASE)
+    let wherePersonas = "WHERE tipo_persona != 'Admin'";
+    let whereAccesos = "WHERE 1=1"; 
+    
+    if (tipoPersona) {
+      wherePersonas += ` AND tipo_persona = '${tipoPersona}'`;
+      whereAccesos += ` AND p.tipo_persona = '${tipoPersona}'`;
+    }
+    if (fechaInicio) {
+      whereAccesos += ` AND date(a.fecha) >= date('${fechaInicio}')`;
+    }
+    if (fechaFin) {
+      whereAccesos += ` AND date(a.fecha) <= date('${fechaFin}')`;
+    }
+    if (horaInicio) {
+      whereAccesos += ` AND strftime('%H:%M', a.fecha) >= '${horaInicio}'`;
+    }
+    if (horaFin) {
+      whereAccesos += ` AND strftime('%H:%M', a.fecha) <= '${horaFin}'`;
+    }
+
+    // --- 1. CONTADORES GENERALES ---
+    const total = await db.execute(`SELECT COUNT(*) as c FROM personas ${wherePersonas}`);
+    
+    const accesosHoy = await db.execute(`
+      SELECT COUNT(*) as c 
+      FROM accesos a 
+      JOIN personas p ON a.persona_id = p.id
+      ${whereAccesos} 
+      AND date(a.fecha) = date('now', 'localtime')
+    `);
+    
+    // Contadores por Rol (Helper function)
+    const getCountByRole = async (rol: string) => {
+      if (tipoPersona && tipoPersona !== rol) return 0;
+      const res = await db.execute(`SELECT COUNT(*) as c FROM personas WHERE tipo_persona = '${rol}' AND estado = 'Activo'`);
+      return (res.rows[0] as any).c;
+    };
+
+    const countEstudiantes = await getCountByRole('Estudiante');
+    const countDocentes = await getCountByRole('Docente');
+    const countAdmin = await getCountByRole('Administrativo');
+    const countGeneral = await getCountByRole('General');
+
+    // --- 2. ÚLTIMOS MOVIMIENTOS ---
     const ultimos = await db.execute(`
       SELECT p.primer_nombre, p.primer_apellido, p.tipo_persona, a.metodo, a.fecha
-      FROM accesos a JOIN personas p ON a.persona_id = p.id
-      ORDER BY a.fecha DESC LIMIT 5
+      FROM accesos a 
+      JOIN personas p ON a.persona_id = p.id
+      ${whereAccesos}
+      ORDER BY a.fecha DESC LIMIT 10
     `);
 
-    // 3. GRÁFICA PERFECTA DE 7 DÍAS
-    // Consultamos la cantidad agrupada por fecha
-    const rawGrafica = await db.execute(`
-      SELECT strftime('%Y-%m-%d', fecha) as dia, COUNT(*) as cantidad
-      FROM accesos
-      WHERE fecha >= date('now', '-6 days', 'localtime')
+    // --- 3. GRÁFICA SEMANAL (Últimos 7 días) ---
+    const rawGraficaSemanal = await db.execute(`
+      SELECT strftime('%Y-%m-%d', a.fecha) as dia, COUNT(*) as cantidad
+      FROM accesos a
+      JOIN personas p ON a.persona_id = p.id
+      ${whereAccesos}
+      AND a.fecha >= date('now', '-6 days', 'localtime')
       GROUP BY dia
     `);
 
-    // Generamos los últimos 7 días manualmente en JS para asegurar que los días vacíos sean 0
     const diasSemana = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-    const graficaFinal = [];
-
+    const graficaSemanalFinal = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      // Formato YYYY-MM-DD local para comparar con SQL
-      const fechaStr = d.toLocaleDateString('en-CA'); // Esto da formato ISO local YYYY-MM-DD
-      
-      const datoEncontrado = rawGrafica.rows.find((r: any) => r.dia === fechaStr);
-      
-      graficaFinal.push({
-        name: diasSemana[d.getDay()], // Nombre del día (Lun, Mar...)
+      const fechaStr = d.toLocaleDateString('en-CA');
+      // Uso de 'as any[]' para evitar errores de tipo al buscar
+      const dato = (rawGraficaSemanal.rows as any[]).find((r: any) => r.dia === fechaStr);
+      graficaSemanalFinal.push({
+        name: diasSemana[d.getDay()],
         fecha: fechaStr,
-        accesos: datoEncontrado ? Number(datoEncontrado.cantidad) : 0 // Si no hay dato, es 0
+        accesos: dato ? Number(dato.cantidad) : 0
       });
     }
 
+    // --- 4. ✅ GRÁFICA POR HORA (Para el día seleccionado) ---
+    // Si el usuario envió fechaInicio, usamos esa fecha. Si no, usamos HOY.
+    const fechaParaHoras = fechaInicio ? fechaInicio : new Date().toISOString().split('T')[0];
+    
+    // Consulta SQL agrupada por hora (00 - 23)
+    const rawGraficaHoras = await db.execute({
+      sql: `
+        SELECT strftime('%H', a.fecha) as hora, COUNT(*) as cantidad
+        FROM accesos a
+        JOIN personas p ON a.persona_id = p.id
+        WHERE date(a.fecha) = date(?)
+        ${tipoPersona ? `AND p.tipo_persona = '${tipoPersona}'` : ''}
+        GROUP BY hora
+        ORDER BY hora ASC
+      `,
+      args: [fechaParaHoras]
+    });
+
+    // Rellenar las 24 horas (Si no hay datos a las 3am, ponemos 0)
+    const graficaHorasFinal = Array.from({ length: 24 }, (_, i) => {
+      const horaStr = i.toString().padStart(2, '0'); // "00", "01", ... "23"
+      // Uso de 'as any[]' para evitar errores de tipo al buscar
+      const datoEncontrado = (rawGraficaHoras.rows as any[]).find((r: any) => r.hora === horaStr);
+      
+      return {
+        hora: `${horaStr}:00`,
+        cantidad: datoEncontrado ? Number(datoEncontrado.cantidad) : 0
+      };
+    });
+
     res.json({
-      total: total.rows[0].c,
-      hoy: accesosHoy.rows[0].c,
-      estudiantes: estudiantes.rows[0].c,
-      docentes: docentes.rows[0].c,
-      administrativos: administrativos.rows[0].c,
-      general: general.rows[0].c,
+      total: (total.rows[0] as any).c,
+      hoy: (accesosHoy.rows[0] as any).c,
+      estudiantes: countEstudiantes,
+      docentes: countDocentes,
+      administrativos: countAdmin,
+      general: countGeneral,
       recientes: ultimos.rows,
-      grafica: graficaFinal
+      grafica: graficaSemanalFinal,     
+      graficaPorHora: graficaHorasFinal 
     });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Error stats" });
+    console.error('❌ Error en obtenerGraficos:', error);
+    res.status(500).json({ error: "Error obteniendo estadísticas" });
   }
 };
