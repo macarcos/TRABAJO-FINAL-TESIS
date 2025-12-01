@@ -1,0 +1,13 @@
+# Dependencias (muy pesadas, no se suben)
+node_modules/
+
+# Variables de entorno (SECRETOS - NUNCA SUBIR)
+.env
+
+# Archivos de compilación (Railway los creará solo)
+dist/
+build/
+
+# Logs y archivos del sistema
+*.log
+.DS_Store
