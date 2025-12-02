@@ -8,7 +8,8 @@ import {
   User, 
   LogOut,
   UserCog,
-  History // <--- Agregué este icono para que se vea diferente a Reportes
+  History,
+  Usb // 🔌 IMPORTANTE: Asegúrate de importar este icono
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -21,10 +22,11 @@ export default function Sidebar() {
     { icon: UserPlus, label: 'Registro Personas', path: '/dashboard/registro' },
     { icon: UserCog, label: 'Gestión Admins', path: '/dashboard/admins' },
     { icon: ShieldCheck, label: 'Control de Acceso', path: '/dashboard/acceso' },
-    
-    // 👇👇👇 AQUÍ ESTÁ LA NUEVA OPCIÓN AGREGADA 👇👇👇
     { icon: History, label: 'Historial de Accesos', path: '/dashboard/historial' },
-    // --------------------------------------------------
+    
+    // 👇 ESTA ES LA OPCIÓN NUEVA
+    { icon: Usb, label: 'Conexión Arduino', path: '/dashboard/arduino' },
+    // ---------------------------
 
     { icon: FileText, label: 'Reportes', path: '/dashboard/reportes' },
     { icon: User, label: 'Mi Perfil', path: '/dashboard/perfil' },
@@ -37,13 +39,25 @@ export default function Sidebar() {
 
   return (
     <div className="w-64 bg-unemi-primary text-white h-screen fixed left-0 top-0 flex flex-col shadow-2xl z-50">
-      {/* Logo */}
+      {/* HEADER / LOGO */}
       <div className="p-6 flex items-center gap-3 border-b border-white/10">
-        <div className="bg-white p-2 rounded-lg text-unemi-primary font-bold shadow-md">UA</div>
-        <h1 className="text-xl font-bold tracking-wide">Uniacces</h1>
+        <div className="bg-white p-1.5 rounded-lg shadow-md flex items-center justify-center">
+            {/* Logo UNEMI desde URL pública */}
+            <img 
+                src="https://sga.unemi.edu.ec/media/fotos/2021/03/17/logo_unemi.png" 
+                alt="Logo UNEMI" 
+                className="w-8 h-8 object-contain"
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+        </div>
+        
+        <div className="flex flex-col">
+            <h1 className="text-lg font-bold tracking-wide leading-tight">UNI</h1>
+            <span className="text-xs text-blue-200 font-medium tracking-widest uppercase">Access</span>
+        </div>
       </div>
       
-      {/* Navegación */}
+      {/* NAVEGACIÓN */}
       <nav className="flex-1 mt-6 px-2 space-y-1 overflow-y-auto">
         {menuItems.map((item) => {
           const isActive = location.pathname === item.path;
@@ -64,7 +78,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Botón Salir */}
+      {/* BOTÓN SALIR */}
       <div className="p-4 border-t border-white/10 bg-unemi-secondary/30">
         <button 
           onClick={handleLogout}

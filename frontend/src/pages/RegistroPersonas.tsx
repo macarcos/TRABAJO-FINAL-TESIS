@@ -322,13 +322,18 @@ export default function RegistroPersonas() {
                   {...register("cedula", { 
                     required: "Cédula requerida",
                     pattern: {
-                      value: /^\d{10}$/,
-                      message: "La cédula debe tener 10 dígitos"
+                      value: /^09\d{8}$/,
+                      message: "Debe comenzar con 09 y tener 10 dígitos exactos"
                     }
                   })} 
-                  placeholder="Cédula (10 dígitos) *" 
+                  placeholder="Ej: 0912345678 *" 
                   className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition"
                   maxLength={10}
+                  inputMode="numeric"
+                  onInput={(e) => {
+                    const valor = e.currentTarget.value.replace(/\D/g, '').slice(0, 10);
+                    e.currentTarget.value = valor;
+                  }}
                 />
               </div>
               {errors.cedula && <p className="text-red-500 text-xs mt-1">{errors.cedula.message as string}</p>}
@@ -352,13 +357,27 @@ export default function RegistroPersonas() {
               {errors.correo && <p className="text-red-500 text-xs mt-1">{errors.correo.message as string}</p>}
             </div>
             
-            <div className="relative">
-              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
-              <input 
-                {...register("telefono")} 
-                placeholder="Teléfono (Opcional)" 
-                className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition"
-              />
+            <div>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
+                <input 
+                  {...register("telefono", {
+                    pattern: {
+                      value: /^09\d{8}$/,
+                      message: "Debe comenzar con 09 y tener 10 dígitos exactos"
+                    }
+                  })} 
+                  placeholder="Ej: 0987654321 (Opcional)" 
+                  className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition"
+                  maxLength={10}
+                  inputMode="numeric"
+                  onInput={(e) => {
+                    const valor = e.currentTarget.value.replace(/\D/g, '').slice(0, 10);
+                    e.currentTarget.value = valor;
+                  }}
+                />
+              </div>
+              {errors.telefono && <p className="text-red-500 text-xs mt-1">{errors.telefono.message as string}</p>}
             </div>
           </div>
 

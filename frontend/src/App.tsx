@@ -7,10 +7,12 @@ import GestionAdmins from './pages/GestionAdmins';
 import ForzarCambioPassword from './pages/ForzarCambioPassword';
 import ControlAcceso from './pages/ControlAcceso';
 import ListaAccesos from './pages/ListaAccesos';
-// IMPORTAMOS LOS NUEVOS ARCHIVOS
 import Dashboard from './pages/Dashboard';
 import Reportes from './pages/Reportes';
 import MiPerfil from './pages/MiPerfil';
+
+// ✅ 1. IMPORTAMOS LA NUEVA PÁGINA
+import ConexionArduino from './pages/ConexionArduino';
 
 function App() {
   return (
@@ -30,7 +32,10 @@ function App() {
           <Route path="acceso" element={<ControlAcceso />} />
           <Route path="historial" element={<ListaAccesos />} />
           
-          {/* RUTAS NUEVAS CONECTADAS */}
+          {/* ✅ 2. AGREGAMOS LA RUTA NUEVA AQUÍ */}
+          <Route path="arduino" element={<ConexionArduino />} />
+          {/* ---------------------------------- */}
+
           <Route path="reportes" element={<Reportes />} />
           <Route path="perfil" element={<MiPerfil />} />
 

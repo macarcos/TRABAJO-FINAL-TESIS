@@ -156,7 +156,7 @@ export default function ListaAccesos() {
                         {h.metodo === 'Reconocimiento Facial' && '📸 Facial'}
                         {h.metodo === 'RFID Físico' && '💳 Tarjeta'}
                         {h.metodo === 'Simulación Web' && '🧪 Test'}
-                        {h.metodo === 'RFID Física' && '💳 RFID'}
+                        {h.metodo === 'RFID Virtual' && '💳 RFID'}
                         {!['Reconocimiento Facial', 'RFID Físico', 'Simulación Web', 'RFID Física'].includes(h.metodo) && h.metodo}
                       </span>
                     </td>
