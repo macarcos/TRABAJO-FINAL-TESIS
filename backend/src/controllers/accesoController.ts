@@ -1,11 +1,19 @@
 import { Request, Response } from 'express';
-import { db } from '../config/db';
+import { db } from '../config/db'; // Asegúrate de que esta ruta sea correcta según tu estructura
 
 // ============================================
 // 1. REGISTRAR UN ACCESO (Facial, RFID o App)
 // ============================================
 export const registrarAcceso = async (req: Request, res: Response) => {
-  const { persona_id, metodo, fecha } = req.body; 
+  // ✅ CORRECCIÓN: Ahora recibimos los nuevos datos del body
+  const { 
+    persona_id, 
+    metodo, 
+    fecha, 
+    foto_verificacion_base64, 
+    confianza_facial, 
+    dispositivo 
+  } = req.body; 
   
   try {
     // ✅ VALIDACIONES
@@ -46,18 +54,29 @@ export const registrarAcceso = async (req: Request, res: Response) => {
       });
     }
 
-    // ✅ REGISTRAR ACCESO
-    if (fecha) {
-      await db.execute({
-        sql: "INSERT INTO accesos (persona_id, metodo, fecha) VALUES (?, ?, ?)",
-        args: [persona_id, metodo, fecha]
-      });
-    } else {
-      await db.execute({
-        sql: "INSERT INTO accesos (persona_id, metodo) VALUES (?, ?)",
-        args: [persona_id, metodo]
-      });
-    }
+    // ✅ REGISTRAR ACCESO (CORREGIDO CON TODOS LOS CAMPOS)
+    console.log(`📝 Registrando acceso: ${metodo} para ID ${persona_id}`);
+    
+    await db.execute({
+      sql: `
+        INSERT INTO accesos (
+          persona_id, 
+          metodo, 
+          fecha, 
+          foto_verificacion_base64, 
+          confianza_facial, 
+          dispositivo
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      args: [
+        persona_id, 
+        metodo, 
+        fecha || new Date().toISOString(), // Si no viene fecha, usa la actual
+        foto_verificacion_base64 || null,  // ✅ GUARDA LA FOTO
+        confianza_facial || null,          // ✅ GUARDA LA CONFIANZA
+        dispositivo || 'Desconocido'       // ✅ GUARDA EL DISPOSITIVO
+      ]
+    });
 
     res.json({ 
       success: true, 
@@ -80,11 +99,15 @@ export const registrarAcceso = async (req: Request, res: Response) => {
 // ============================================
 export const obtenerUltimosAccesos = async (req: Request, res: Response) => {
   try {
+    // ✅ CORRECCIÓN: Agregamos los nuevos campos al SELECT
     const result = await db.execute(`
       SELECT 
         a.id, 
         a.metodo, 
         a.fecha,
+        a.foto_verificacion_base64,
+        a.confianza_facial,
+        a.dispositivo,
         p.id as persona_id,
         p.primer_nombre, 
         p.primer_apellido, 
@@ -93,7 +116,7 @@ export const obtenerUltimosAccesos = async (req: Request, res: Response) => {
         p.tipo_persona
       FROM accesos a
       JOIN personas p ON a.persona_id = p.id
-      ORDER BY a.fecha DESC
+      ORDER BY a.id DESC
       LIMIT 10
     `);
 
@@ -113,11 +136,15 @@ export const obtenerUltimosAccesos = async (req: Request, res: Response) => {
 // ============================================
 export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
   try {
+    // ✅ CORRECCIÓN: Agregamos los nuevos campos al SELECT
     const result = await db.execute(`
       SELECT 
         a.id, 
         a.metodo, 
         a.fecha,
+        a.foto_verificacion_base64,
+        a.confianza_facial,
+        a.dispositivo,
         p.id as persona_id,
         p.primer_nombre, 
         p.primer_apellido, 
@@ -127,7 +154,7 @@ export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
         p.correo
       FROM accesos a
       JOIN personas p ON a.persona_id = p.id
-      ORDER BY a.fecha DESC
+      ORDER BY a.id DESC
       LIMIT 1000
     `);
 
@@ -166,40 +193,126 @@ export const borrarHistorial = async (req: Request, res: Response) => {
 };
 
 // ============================================
-// 5. VERIFICAR ACCESO POR RFID
+// 5. ✨ VERIFICAR ACCESO POR RFID O SEEB_BILLETERA ✨
 // ============================================
 export const verificarAccesoPorRFID = async (req: Request, res: Response) => {
   try {
-    const { rfid_code } = req.body;
+    const { rfid_code, foto_verificacion_base64, dispositivo } = req.body;
 
-    if (!rfid_code) {
-      return res.status(400).json({ success: false, error: 'Se requiere el código RFID' });
-    }
-
-    const resultado = await db.execute({
-      sql: `SELECT id, primer_nombre, primer_apellido, tipo_persona, foto_url, estado FROM personas WHERE rfid_code = ?`,
-      args: [rfid_code]
+    console.log('📥 REQUEST RECIBIDO:', { 
+      rfid_code, 
+      tiene_foto: !!foto_verificacion_base64,
+      dispositivo 
     });
 
+    if (!rfid_code) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Se requiere el código RFID o SEEB' 
+      });
+    }
+
+    // ✅ CAMBIO PRINCIPAL: Buscar en AMBOS campos simultáneamente
+    console.log('🔍 Buscando código en la base de datos...');
+    
+    const resultado = await db.execute({
+      sql: `
+        SELECT 
+          id, 
+          primer_nombre, 
+          primer_apellido, 
+          tipo_persona, 
+          foto_url, 
+          estado,
+          rfid_code,
+          seeb_billetera
+        FROM personas 
+        WHERE estado = 'Activo'
+        AND (
+          COALESCE(rfid_code, '') = ? 
+          OR 
+          COALESCE(seeb_billetera, '') = ?
+        )
+      `,
+      args: [rfid_code, rfid_code]
+    });
+
+    console.log('📊 Resultados encontrados:', resultado.rows.length);
+
     if (resultado.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Tarjeta RFID no registrada', acceso_autorizado: false });
+      console.log('❌ Código no encontrado en la BD');
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Código no registrado en el sistema', 
+        acceso_autorizado: false 
+      });
     }
 
     const persona = resultado.rows[0] as any;
 
-    if (persona.estado !== 'Activo') {
-      return res.status(403).json({ success: false, error: 'Usuario inactivo', acceso_autorizado: false });
+    console.log('✅ Persona encontrada:', {
+      id: persona.id,
+      nombre: `${persona.primer_nombre} ${persona.primer_apellido}`,
+      rfid_code: persona.rfid_code,
+      seeb_billetera: persona.seeb_billetera
+    });
+
+    // ✅ Determinar automáticamente qué tipo de código se usó
+    let tipoMetodo = 'RFID Físico';
+    
+    // Verificar qué campo coincidió con el código ingresado
+    if (persona.seeb_billetera && persona.seeb_billetera === rfid_code) {
+      tipoMetodo = 'SEEB Billetera Virtual';
+    } else if (persona.rfid_code && persona.rfid_code === rfid_code) {
+      tipoMetodo = 'RFID Físico';
+    } else if (dispositivo === 'NFC Virtual') {
+      tipoMetodo = 'RFID Virtual';
     }
 
+    console.log(`📡 Código detectado: ${rfid_code}`);
+    console.log(`👤 Persona: ${persona.primer_nombre} ${persona.primer_apellido}`);
+    console.log(`🔖 Método: ${tipoMetodo}`);
+    console.log(`📸 Foto: ${foto_verificacion_base64 ? 'SÍ' : 'NO'}`);
+
+    // ✅ Registrar acceso con el método correcto
+    console.log('💾 Insertando acceso en la BD...');
+    
+    // ✅ GENERAR FECHA ACTUAL EN FORMATO CONSISTENTE
+    const fechaActual = new Date();
+    const año = fechaActual.getFullYear();
+    const mes = String(fechaActual.getMonth() + 1).padStart(2, '0');
+    const dia = String(fechaActual.getDate()).padStart(2, '0');
+    const hora = String(fechaActual.getHours()).padStart(2, '0');
+    const minutos = String(fechaActual.getMinutes()).padStart(2, '0');
+    const segundos = String(fechaActual.getSeconds()).padStart(2, '0');
+    const fechaFormateada = `${año}-${mes}-${dia} ${hora}:${minutos}:${segundos}`;
+    
     await db.execute({
-      sql: "INSERT INTO accesos (persona_id, metodo) VALUES (?, 'RFID Física')",
-      args: [persona.id]
+      sql: `
+        INSERT INTO accesos (
+          persona_id, 
+          metodo, 
+          fecha,
+          foto_verificacion_base64, 
+          dispositivo
+        ) VALUES (?, ?, ?, ?, ?)
+      `,
+      args: [
+        persona.id, 
+        tipoMetodo,
+        fechaFormateada, // 👈 FECHA EXPLÍCITA
+        foto_verificacion_base64 || null,
+        dispositivo || 'Terminal de Acceso'
+      ]
     });
+
+    console.log('✅ Acceso registrado exitosamente');
 
     res.json({
       success: true,
       acceso_autorizado: true,
       mensaje: `Bienvenido ${persona.primer_nombre} ${persona.primer_apellido}`,
+      metodo_usado: tipoMetodo,
       persona: {
         id: persona.id,
         nombre: `${persona.primer_nombre} ${persona.primer_apellido}`,
@@ -209,8 +322,13 @@ export const verificarAccesoPorRFID = async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
-    console.error('❌ Error verificando acceso RFID:', error);
-    res.status(500).json({ success: false, error: 'Error al verificar acceso' });
+    console.error('❌❌❌ ERROR COMPLETO:', error);
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Error al verificar acceso',
+      detalle: error.message // 👈 Esto te dirá qué falló exactamente
+    });
   }
 };
 
@@ -256,14 +374,12 @@ export const obtenerEstadisticas = async (req: Request, res: Response) => {
 // ==========================================================
 export const obtenerGraficos = async (req: Request, res: Response) => {
   try {
-    // ✅ TIPADO SEGURO: Convertimos req.query a string para evitar errores de TS
     const fechaInicio = req.query.fechaInicio as string | undefined;
     const fechaFin = req.query.fechaFin as string | undefined;
     const horaInicio = req.query.horaInicio as string | undefined;
     const horaFin = req.query.horaFin as string | undefined;
     const tipoPersona = req.query.tipoPersona as string | undefined;
 
-    // ✅ CONSTRUIR CONDICIONES WHERE DINÁMICAS (BASE)
     let wherePersonas = "WHERE tipo_persona != 'Admin'";
     let whereAccesos = "WHERE 1=1"; 
     
@@ -295,7 +411,6 @@ export const obtenerGraficos = async (req: Request, res: Response) => {
       AND date(a.fecha) = date('now', 'localtime')
     `);
     
-    // Contadores por Rol (Helper function)
     const getCountByRole = async (rol: string) => {
       if (tipoPersona && tipoPersona !== rol) return 0;
       const res = await db.execute(`SELECT COUNT(*) as c FROM personas WHERE tipo_persona = '${rol}' AND estado = 'Activo'`);
@@ -316,7 +431,7 @@ export const obtenerGraficos = async (req: Request, res: Response) => {
       ORDER BY a.fecha DESC LIMIT 10
     `);
 
-    // --- 3. GRÁFICA SEMANAL (Últimos 7 días) ---
+    // --- 3. GRÁFICA SEMANAL ---
     const rawGraficaSemanal = await db.execute(`
       SELECT strftime('%Y-%m-%d', a.fecha) as dia, COUNT(*) as cantidad
       FROM accesos a
@@ -332,7 +447,6 @@ export const obtenerGraficos = async (req: Request, res: Response) => {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const fechaStr = d.toLocaleDateString('en-CA');
-      // Uso de 'as any[]' para evitar errores de tipo al buscar
       const dato = (rawGraficaSemanal.rows as any[]).find((r: any) => r.dia === fechaStr);
       graficaSemanalFinal.push({
         name: diasSemana[d.getDay()],
@@ -341,11 +455,9 @@ export const obtenerGraficos = async (req: Request, res: Response) => {
       });
     }
 
-    // --- 4. ✅ GRÁFICA POR HORA (Para el día seleccionado) ---
-    // Si el usuario envió fechaInicio, usamos esa fecha. Si no, usamos HOY.
+    // --- 4. GRÁFICA POR HORA ---
     const fechaParaHoras = fechaInicio ? fechaInicio : new Date().toISOString().split('T')[0];
     
-    // Consulta SQL agrupada por hora (00 - 23)
     const rawGraficaHoras = await db.execute({
       sql: `
         SELECT strftime('%H', a.fecha) as hora, COUNT(*) as cantidad
@@ -359,10 +471,8 @@ export const obtenerGraficos = async (req: Request, res: Response) => {
       args: [fechaParaHoras]
     });
 
-    // Rellenar las 24 horas (Si no hay datos a las 3am, ponemos 0)
     const graficaHorasFinal = Array.from({ length: 24 }, (_, i) => {
-      const horaStr = i.toString().padStart(2, '0'); // "00", "01", ... "23"
-      // Uso de 'as any[]' para evitar errores de tipo al buscar
+      const horaStr = i.toString().padStart(2, '0');
       const datoEncontrado = (rawGraficaHoras.rows as any[]).find((r: any) => r.hora === horaStr);
       
       return {

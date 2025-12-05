@@ -20,7 +20,7 @@ function generarCodigoAlfanumerico(): string {
 }
 
 // ============================================
-// 1. LOGIN (✅ CORREGIDO - Incluye seed_billetera y foto_url)
+// 1. LOGIN (✅ CORREGIDO - Incluye seeb_billetera y foto_url)
 // ============================================
 export const login = async (req: Request, res: Response) => {
   const { usuario, password } = req.body;
@@ -37,7 +37,7 @@ export const login = async (req: Request, res: Response) => {
           usuario,
           password,
           foto_url,
-          seed_billetera,
+          seeb_billetera,
           needs_password_reset,
           estado
         FROM personas 
@@ -67,7 +67,7 @@ export const login = async (req: Request, res: Response) => {
         nombre: `${u.primer_nombre} ${u.primer_apellido}`,
         rol: u.tipo_persona,
         foto_url: u.foto_url || '',
-        seed_billetera: u.seed_billetera || '',
+        seeb_billetera: u.seeb_billetera || '',
         iniciales: (u.primer_nombre as string)[0] + (u.primer_apellido as string)[0],
         needsReset: u.needs_password_reset === 1
       }
@@ -152,7 +152,7 @@ export const registrar = async (req: Request, res: Response) => {
             : (cedula || crypto.randomBytes(4).toString('hex'));
 
         // ✅ GENERAR CÓDIGO ALFANUMÉRICO DE BILLETERA (8 caracteres para no-Admins)
-        let seed = null;
+        let seeb = null;
         if (tipo_persona !== 'Admin') {
             // Generar código único (verificar que no exista)
             let codigoUnico = generarCodigoAlfanumerico();
@@ -160,12 +160,12 @@ export const registrar = async (req: Request, res: Response) => {
             
             while (intentos < 10) {
                 const existe = await db.execute({
-                    sql: "SELECT id FROM personas WHERE seed_billetera = ?",
+                    sql: "SELECT id FROM personas WHERE seeb_billetera = ?",
                     args: [codigoUnico]
                 });
                 
                 if (existe.rows.length === 0) {
-                    seed = codigoUnico;
+                    seeb = codigoUnico;
                     break;
                 }
                 
@@ -174,7 +174,7 @@ export const registrar = async (req: Request, res: Response) => {
             }
             
             // Si después de 10 intentos sigue duplicado, usar el último generado
-            if (!seed) seed = codigoUnico;
+            if (!seeb) seeb = codigoUnico;
         }
 
         // ✅ VERIFICAR CÉDULA DUPLICADA (solo si se proporcionó)
@@ -204,7 +204,7 @@ export const registrar = async (req: Request, res: Response) => {
             sql: `INSERT INTO personas (
                 primer_nombre, segundo_nombre, primer_apellido, segundo_apellido,
                 correo, tipo_persona, usuario, password, cedula, telefono, 
-                seed_billetera, vector_facial, rfid_code, foto_url, needs_password_reset
+                seeb_billetera, vector_facial, rfid_code, foto_url, needs_password_reset
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             args: [
                 primer_nombre, 
@@ -217,7 +217,7 @@ export const registrar = async (req: Request, res: Response) => {
                 password, 
                 cedula || null, 
                 telefono || null, 
-                seed,
+                seeb,
                 vector_facial ? JSON.stringify(vector_facial) : null,
                 rfid_code || null, 
                 foto_base64 || null,
@@ -243,11 +243,11 @@ export const registrar = async (req: Request, res: Response) => {
             success: true, 
             usuario: usuarioFinal,
             password: password,
-            seed_billetera: seed,
+            seeb_billetera: seeb,
             id: Number(resultado.lastInsertRowid),
             message: tipo_persona === 'Admin' 
                 ? 'Administrador registrado exitosamente. Debe cambiar contraseña al primer ingreso.'
-                : `Persona registrada exitosamente. Código de billetera: ${seed}`
+                : `Persona registrada exitosamente. Código de billetera: ${seeb}`
         });
 
     } catch (e: any) {
@@ -285,7 +285,7 @@ export const obtenerPersonas = async (req: Request, res: Response) => {
         rfid_code,
         foto_url,
         vector_facial,
-        seed_billetera,
+        seeb_billetera,
         created_at
       FROM personas 
       ORDER BY created_at DESC

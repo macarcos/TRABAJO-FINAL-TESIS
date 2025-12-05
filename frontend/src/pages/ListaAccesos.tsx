@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Search, Trash2, Calendar } from 'lucide-react';
+import { Search, Trash2, Calendar, Eye, X } from 'lucide-react';
 
 export default function ListaAccesos() {
   const [historial, setHistorial] = useState<any[]>([]);
   const [busqueda, setBusqueda] = useState('');
+  const [fotoModal, setFotoModal] = useState<{ visible: boolean; foto: string | null; metodo: string; persona: string }>({
+    visible: false,
+    foto: null,
+    metodo: '',
+    persona: ''
+  });
 
   useEffect(() => { cargarHistorial(); }, []);
 
@@ -14,7 +20,6 @@ export default function ListaAccesos() {
       const res = await axios.get('http://localhost:3000/api/acceso/historial');
       console.log('📥 Respuesta del backend:', res.data);
       
-      // ✅ El backend devuelve { success: true, total: X, accesos: [...] }
       if (res.data.accesos) {
         setHistorial(res.data.accesos);
         console.log(`✅ ${res.data.accesos.length} registros cargados`);
@@ -29,7 +34,7 @@ export default function ListaAccesos() {
   };
 
   const borrarHistorial = async () => {
-    if(!confirm("⚠️ ¿BORRAR TODO EL HISTORIAL?\nEsta acción no se puede deshacer.")) return;
+    if(!confirm("⚠️ ¿BORRAR TODO EL HISTORIAL?\nEsta acción no se puede deshacer.\n\n⚠️ Se eliminarán todas las fotos de verificación.")) return;
     try {
       const res = await axios.delete('http://localhost:3000/api/acceso/historial');
       console.log('🗑️ Respuesta del servidor:', res.data);
@@ -62,6 +67,26 @@ export default function ListaAccesos() {
     }
   };
 
+  // ✅ ABRIR MODAL CON FOTO
+  const abrirFoto = (foto: string | null, metodo: string, persona: string) => {
+    setFotoModal({
+      visible: true,
+      foto,
+      metodo,
+      persona
+    });
+  };
+
+  // ✅ CERRAR MODAL
+  const cerrarFoto = () => {
+    setFotoModal({
+      visible: false,
+      foto: null,
+      metodo: '',
+      persona: ''
+    });
+  };
+
   const filtrados = historial.filter(h => 
     h.primer_nombre?.toLowerCase().includes(busqueda.toLowerCase()) ||
     h.primer_apellido?.toLowerCase().includes(busqueda.toLowerCase()) ||
@@ -73,9 +98,9 @@ export default function ListaAccesos() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100 gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-unemi-text">Historial de Accesos</h2>
+          <h2 className="text-2xl font-bold text-gray-800">Historial de Accesos</h2>
           <p className="text-sm text-gray-500">
-            Registro completo de ingresos - <span className="font-bold text-unemi-primary">{historial.length}</span> registros
+            Registro completo de ingresos - <span className="font-bold text-blue-600">{historial.length}</span> registros
           </p>
         </div>
         <button 
@@ -92,7 +117,7 @@ export default function ListaAccesos() {
         <Search className="absolute left-3 top-3 text-gray-400" size={18}/>
         <input 
           placeholder="Buscar por nombre o cédula..." 
-          className="w-full pl-10 p-2 border rounded-xl outline-none focus:ring-2 focus:ring-unemi-primary/50" 
+          className="w-full pl-10 p-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500/50" 
           onChange={e => setBusqueda(e.target.value)} 
           value={busqueda}
         />
@@ -108,13 +133,15 @@ export default function ListaAccesos() {
                 <th className="p-4">Cédula</th>
                 <th className="p-4">Rol</th>
                 <th className="p-4">Método</th>
+                <th className="p-4">Foto Verificación</th>
+                <th className="p-4">Confianza</th>
                 <th className="p-4">Fecha y Hora</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtrados.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-400">
+                  <td colSpan={7} className="p-8 text-center text-gray-400">
                     {busqueda ? '🔍 No se encontraron resultados' : '📭 No hay registros en el historial'}
                   </td>
                 </tr>
@@ -129,7 +156,7 @@ export default function ListaAccesos() {
                           alt="Foto"
                         />
                       ) : (
-                        <div className="w-10 h-10 rounded-full bg-unemi-primary/10 text-unemi-primary flex items-center justify-center font-bold text-xs">
+                        <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
                           {h.primer_nombre?.[0] || '?'}
                         </div>
                       )}
@@ -155,10 +182,34 @@ export default function ListaAccesos() {
                       <span className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded text-xs border border-gray-200 w-max">
                         {h.metodo === 'Reconocimiento Facial' && '📸 Facial'}
                         {h.metodo === 'RFID Físico' && '💳 Tarjeta'}
-                        {h.metodo === 'Simulación Web' && '🧪 Test'}
-                        {h.metodo === 'RFID Virtual' && '💳 RFID'}
-                        {!['Reconocimiento Facial', 'RFID Físico', 'Simulación Web', 'RFID Física'].includes(h.metodo) && h.metodo}
+                        {h.metodo === 'RFID Virtual' && '📱 NFC'}
+                        {!['Reconocimiento Facial', 'RFID Físico', 'RFID Virtual'].includes(h.metodo) && h.metodo}
                       </span>
+                    </td>
+                    <td className="p-4">
+                      {h.foto_verificacion_base64 ? (
+                        <button
+                          onClick={() => abrirFoto(h.foto_verificacion_base64, h.metodo, `${h.primer_nombre} ${h.primer_apellido}`)}
+                          className="flex items-center gap-2 bg-blue-100 hover:bg-blue-200 text-blue-600 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors border border-blue-300"
+                        >
+                          <Eye size={14}/> Ver
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-400">Sin foto</span>
+                      )}
+                    </td>
+                    <td className="p-4 text-center">
+                      {h.confianza_facial ? (
+                        <span className={`px-2 py-1 rounded text-xs font-bold border ${
+                          h.confianza_facial >= 80 ? 'bg-green-50 text-green-700 border-green-200' :
+                          h.confianza_facial >= 60 ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
+                          'bg-red-50 text-red-700 border-red-200'
+                        }`}>
+                          {h.confianza_facial}%
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">---</span>
+                      )}
                     </td>
                     <td className="p-4 text-gray-600 font-medium">
                       <div className="flex items-center gap-2">
@@ -173,6 +224,54 @@ export default function ListaAccesos() {
           </table>
         </div>
       </div>
+
+      {/* ✅ MODAL DE FOTO */}
+      {fotoModal.visible && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 flex justify-between items-center sticky top-0">
+              <div>
+                <h3 className="font-bold text-lg">Foto de Verificación</h3>
+                <p className="text-sm text-blue-100">{fotoModal.persona}</p>
+              </div>
+              <button
+                onClick={cerrarFoto}
+                className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Contenido */}
+            <div className="p-6 space-y-4">
+              <div className="flex justify-center">
+                <span className="bg-gray-100 text-gray-700 px-4 py-2 rounded-full text-sm font-bold border border-gray-300">
+                  {fotoModal.metodo === 'Reconocimiento Facial' && '📸 Foto Facial'}
+                  {fotoModal.metodo === 'RFID Físico' && '💳 Tarjeta RFID'}
+                  {fotoModal.metodo === 'RFID Virtual' && '📱 NFC Virtual'}
+                </span>
+              </div>
+
+              {fotoModal.foto ? (
+                <img
+                  src={fotoModal.foto}
+                  alt="Foto de verificación"
+                  className="w-full rounded-xl border-2 border-gray-300 shadow-lg max-h-96 object-contain"
+                />
+              ) : (
+                <div className="bg-gray-100 h-64 flex items-center justify-center rounded-xl border-2 border-gray-300">
+                  <p className="text-gray-500 font-semibold">No hay foto disponible</p>
+                </div>
+              )}
+
+              <p className="text-xs text-gray-500 text-center italic">
+                💡 Esta foto se elimina automáticamente al limpiar el historial
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
