@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import Webcam from 'react-webcam';
 import axios from 'axios';
 import * as faceapi from '@vladmandic/face-api';
-import { Camera, ScanLine, Clock, UserCheck, PlayCircle, StopCircle, Loader, AlertCircle, CreditCard, Smartphone, Wifi, Zap } from 'lucide-react';
+import { Camera, Clock, UserCheck, PlayCircle, StopCircle, Loader, CreditCard, CheckCircle, XCircle, Zap, Activity } from 'lucide-react';
+
+const API_URL = 'http://localhost:3000/api';
 
 export default function ControlAcceso() {
   // ========== ESTADO FACIAL ==========
@@ -11,30 +13,31 @@ export default function ControlAcceso() {
   const [mensajeEstado, setMensajeEstado] = useState("Iniciando sistema...");
   const [personaDetectada, setPersonaDetectada] = useState<string | null>(null);
   const [confianza, setConfianza] = useState<number>(0);
-  const [errorCamara, setErrorCamara] = useState<string | null>(null);
   
-  // ========== ESTADO RFID DUAL (Físico + Virtual) ==========
-  const [rfidActivo, setRfidActivo] = useState(true); // Siempre escuchando
+  // ========== ESTADO RFID ==========
   const [codigoRFID, setCodigoRFID] = useState('');
   const [estadoRFID, setEstadoRFID] = useState<'esperando' | 'procesando' | 'exito' | 'error'>('esperando');
-  const [mensajeRFID, setMensajeRFID] = useState('Esperando tarjeta o código virtual...');
+  const [mensajeRFID, setMensajeRFID] = useState('🔄 Conectando a Arduino...');
   const [personaRFID, setPersonaRFID] = useState<any>(null);
-  const [tipoLectura, setTipoLectura] = useState<'fisica' | 'virtual' | null>(null);
+  const [arduinoConectado, setArduinoConectado] = useState(false);
   
   // ========== ESTADO COMPARTIDO ==========
   const [accesos, setAccesos] = useState<any[]>([]);
+  const [totalPersonas, setTotalPersonas] = useState(0);
+  const [totalVisitantes, setTotalVisitantes] = useState(0);
   
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const labeledDescriptors = useRef<any[]>([]);
+  const labeledDescriptors = useRef<faceapi.LabeledFaceDescriptors[]>([]);
   const ultimoRegistro = useRef<{ [key: string]: number }>({});
-  const deteccionActiva = useRef(false);
-  const intervalId = useRef<any>(null);
-  const inputRFIDRef = useRef<HTMLInputElement>(null);
+  const intervaloDeteccion = useRef<any>(null);
   const timeoutRFID = useRef<any>(null);
+  const inputRFIDRef = useRef<HTMLInputElement>(null);
+  const intervaloRevision = useRef<any>(null);
+  const ultimoCodigoRFIDRef = useRef<string>('');
 
   // ====================================
-  // FUNCIONES DE FORMATEO DE FECHA
+  // FORMATEO DE FECHA
   // ====================================
   const horaEcuador = (fechaISO: string) => {
     if (!fechaISO) return "--:--";
@@ -50,30 +53,15 @@ export default function ControlAcceso() {
       if (horaNum === 0) horaNum = 12;
       return `${String(horaNum).padStart(2, '0')}:${min}:${seg} ${ampm}`;
     }
-    if (fechaStr.includes(' ')) {
-      const partes = fechaStr.split(' ');
-      const horaCompleta = partes[1];
-      const [hora, min, seg] = horaCompleta.split(':');
-      let horaNum = parseInt(hora);
-      const ampm = horaNum >= 12 ? 'p. m.' : 'a. m.';
-      if (horaNum > 12) horaNum -= 12;
-      if (horaNum === 0) horaNum = 12;
-      return `${String(horaNum).padStart(2, '0')}:${min}:${seg} ${ampm}`;
-    }
     return new Date(fechaISO).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
   };
 
-  const fechaEcuador = (fechaISO: string) => {
-    if (!fechaISO) return "--/--/----";
-    let fechaStr = fechaISO;
-    if (fechaStr.includes('T')) fechaStr = fechaStr.split('T')[0];
-    if (fechaStr.includes(' ')) fechaStr = fechaStr.split(' ')[0];
-    const [año, mes, dia] = fechaStr.split('-');
-    return `${dia}/${mes}/${año}`;
-  };
+  useEffect(() => {
+    if (inputRFIDRef.current) inputRFIDRef.current.focus();
+  }, []);
 
   // ====================================
-  // 1. CARGAR MODELOS Y PERSONAS
+  // 🔥 CARGAR TODO (Modelos y Datos) - CORREGIDO PARA VISITANTES
   // ====================================
   useEffect(() => {
     const cargarTodo = async () => {
@@ -83,529 +71,391 @@ export default function ControlAcceso() {
         await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
         await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
         await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-        console.log("✅ Modelos de IA cargados");
+        
+        setMensajeEstado("🔄 Obteniendo datos de Personas...");
+        
+        // 1. OBTENER TODOS LOS USUARIOS ACTIVOS (INCLUYE VISITANTES APROBADOS)
+        const resPersonas = await axios.get(`${API_URL}/personas`).catch(() => ({ data: [] }));
 
-        setMensajeEstado("🔄 Cargando personas de la base de datos...");
-        const res = await axios.get('http://localhost:3000/api/personas');
-        const personasNoAdmin = res.data.filter((p: any) => p.vector_facial && p.estado === 'Activo' && p.tipo_persona !== 'Admin');
+        const descriptoresFinales: faceapi.LabeledFaceDescriptors[] = [];
+        let totalVisitantesCont = 0;
+        
+        const personasActivas = resPersonas.data.filter((p: any) => p.estado === 'Activo' && p.tipo_persona !== 'Admin');
+        setTotalPersonas(personasActivas.length);
+        
+        setMensajeEstado("🔄 Procesando rostros activos...");
 
-        const descriptores = personasNoAdmin
-          .map((p: any) => {
+        // 2. PROCESAR PERSONAS Y VISITANTES
+        for (const p of personasActivas) {
+          const nombreMostrar = `${p.primer_nombre} ${p.primer_apellido}`;
+          const label = `${p.tipo_persona}|${p.id}|${nombreMostrar}`;
+          
+          if (p.tipo_persona === 'General') { // Contar visitantes (General = Visitante)
+              totalVisitantesCont++;
+          }
+          
+          // A. USUARIO CON VECTOR PRE-CALCULADO (Estudiantes/Docentes)
+          if (p.vector_facial && p.vector_facial.length > 100) { 
             try {
               const vector = new Float32Array(JSON.parse(p.vector_facial));
-              if (vector.length !== 128) return null;
-              const label = `${p.id}|${p.primer_nombre} ${p.primer_apellido}`;
-              return new faceapi.LabeledFaceDescriptors(label, [vector]);
-            } catch (e) { return null; }
-          })
-          .filter((d: any) => d !== null);
+              if (vector.length === 128) {
+                descriptoresFinales.push(new faceapi.LabeledFaceDescriptors(label, [vector]));
+              }
+            } catch (e) { } 
+          }
+          
+          // B. 🔥 VISITANTE APROBADO SIN VECTOR (Lo calculamos al vuelo para la sesión)
+          else if (p.foto_url && p.foto_url.startsWith('data:image')) {
+            try {
+              setMensajeEstado(`🔄 Procesando rostro visitante: ${p.primer_nombre}...`);
+              const img = await faceapi.fetchImage(p.foto_url);
+              const detection = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
+              
+              if (detection) {
+                descriptoresFinales.push(new faceapi.LabeledFaceDescriptors(label, [detection.descriptor]));
+              }
+            } catch (e) { console.error(`Error procesando rostro de ${p.primer_nombre}`, e); }
+          }
+        }
         
-        labeledDescriptors.current = descriptores;
+        setTotalVisitantes(totalVisitantesCont);
+        labeledDescriptors.current = descriptoresFinales;
         setModelosListos(true);
-        setMensajeEstado(descriptores.length === 0 
-          ? "⚠️ Sistema listo pero no hay personas con reconocimiento facial"
-          : `✅ Sistema listo - ${descriptores.length} personas registradas`
-        );
-        
+        setMensajeEstado(`✅ Sistema listo - ${descriptoresFinales.length} rostros cargados`);
         cargarAccesos();
+
       } catch (error: any) {
-        console.error("❌ Error cargando sistema:", error);
-        setMensajeEstado("❌ Error al inicializar el sistema");
+        setMensajeEstado("❌ Error al inicializar");
       }
     };
     
+    // Ejecutar carga inicial y mantener el monitoreo de accesos reciente
     cargarTodo();
-    const intervaloLista = setInterval(cargarAccesos, 3000);
+    const intervaloLista = setInterval(cargarAccesos, 2000);
     return () => clearInterval(intervaloLista);
-  }, []);
+  }, []); 
 
   // ====================================
-  // 2. CARGAR ÚLTIMOS ACCESOS
+  // MONITOREAR DATOS DEL ARDUINO (LÓGICA MEJORADA)
   // ====================================
+  useEffect(() => {
+    const monitorearArduino = () => {
+      // Si estamos mostrando un mensaje (Verde/Rojo), no procesamos nada nuevo
+      if (estadoRFID !== 'esperando') return;
+
+      if (typeof window !== 'undefined' && (window as any).obtenerUltimoDatoRFID) {
+        const codigoRecibido = (window as any).obtenerUltimoDatoRFID();
+        if (!codigoRecibido) return;
+
+        const codigoLimpio = codigoRecibido.trim();
+
+        // 1. DETECTAR "Esperando..." O RUIDO
+        const esRuido = codigoLimpio.includes("Esperando") || 
+                        codigoLimpio.includes("tarjeta") || 
+                        codigoLimpio.includes("NFC") || 
+                        codigoLimpio.length < 4;
+
+        if (esRuido) {
+            ultimoCodigoRFIDRef.current = ''; 
+            return; 
+        }
+
+        // 2. EVITAR REPETICIÓN INFINITA
+        if (codigoLimpio === ultimoCodigoRFIDRef.current) {
+            return;
+        }
+        
+        // 3. PROCESAR CÓDIGO NUEVO
+        setArduinoConectado(true);
+        console.log('📥 Código Nuevo:', codigoLimpio);
+        
+        const partes = codigoRecibido.split(':');
+        const codigoFinal = partes.length === 2 ? partes[1].trim() : codigoLimpio;
+        
+        // Guardamos en memoria que YA procesamos este código
+        ultimoCodigoRFIDRef.current = codigoRecibido; 
+        
+        setCodigoRFID(codigoFinal); 
+        procesarRFIDDirecto(codigoFinal);
+      }
+    };
+
+    intervaloRevision.current = setInterval(monitorearArduino, 500);
+    return () => {
+      if (intervaloRevision.current) clearInterval(intervaloRevision.current);
+    };
+  }, [estadoRFID]); 
+
   const cargarAccesos = async () => {
     try {
-      const res = await axios.get('http://localhost:3000/api/acceso/ultimos');
-      if (res.data.accesos && res.data.accesos.length > 0) {
-        setAccesos(res.data.accesos);
-      }
-    } catch (e) { console.error('❌ Error cargando accesos:', e); }
+      const res = await axios.get(`${API_URL}/acceso/ultimos`);
+      if (res.data.accesos) setAccesos(res.data.accesos);
+    } catch (e) {}
   };
 
   // ====================================
-  // 3. DETECCIÓN FACIAL
+  // PROCESAR RFID (PETICIÓN AL SERVIDOR)
   // ====================================
-  // ====================================
-// 3. DETECCIÓN FACIAL (OPTIMIZADA - SIN MEMORY LEAK)
-// ====================================
-useEffect(() => {
-  const detectarRostro = async () => {
-    if (!webcamRef.current?.video || !canvasRef.current) return;
-    const video = webcamRef.current.video;
-    const canvas = canvasRef.current;
-    if (video.readyState !== 4) return;
+  const procesarRFIDDirecto = async (codigo: string) => {
+    if (!codigo.trim()) return;
 
-    try {
-      const displaySize = { width: video.videoWidth, height: video.videoHeight };
-      canvas.width = displaySize.width;
-      canvas.height = displaySize.height;
-      faceapi.matchDimensions(canvas, displaySize);
-
-      const detection = await faceapi
-        .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-        .withFaceLandmarks()
-        .withFaceDescriptor();
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (detection && labeledDescriptors.current.length > 0) {
-        const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors.current, 0.6);
-        const match = faceMatcher.findBestMatch(detection.descriptor);
-        const resizedDetection = faceapi.resizeResults(detection, displaySize);
-        const box = resizedDetection.detection.box;
-
-        if (match.label !== 'unknown') {
-          const [idPersona, nombreCompleto] = match.label.split('|');
-          const confidenciaCalc = Math.round((1 - match.distance) * 100);
-          setPersonaDetectada(nombreCompleto);
-          setConfianza(confidenciaCalc);
-
-          ctx.strokeStyle = '#10b981';
-          ctx.lineWidth = 4;
-          ctx.strokeRect(box.x, box.y, box.width, box.height);
-          ctx.fillStyle = '#10b981';
-          ctx.fillRect(box.x, box.y - 40, box.width, 40);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 16px Arial';
-          ctx.fillText(nombreCompleto, box.x + 5, box.y - 20);
-          ctx.font = '12px Arial';
-          ctx.fillText(`${confidenciaCalc}% confianza`, box.x + 5, box.y - 5);
-
-          const landmarks = resizedDetection.landmarks.positions;
-          ctx.fillStyle = '#10b981';
-          landmarks.forEach((point: any) => {
-            ctx.beginPath();
-            ctx.arc(point.x, point.y, 2, 0, 2 * Math.PI);
-            ctx.fill();
-          });
-
-          verificarYRegistrar(idPersona, nombreCompleto);
-        } else {
-          setPersonaDetectada(null);
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 4;
-          ctx.strokeRect(box.x, box.y, box.width, box.height);
-          ctx.fillStyle = '#ef4444';
-          ctx.fillRect(box.x, box.y - 35, box.width, 35);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 14px Arial';
-          ctx.fillText('Desconocido', box.x + 5, box.y - 12);
-        }
-      } else if (detection) {
-        const resizedDetection = faceapi.resizeResults(detection, displaySize);
-        const box = resizedDetection.detection.box;
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(box.x, box.y, box.width, box.height);
-        ctx.fillStyle = '#f59e0b';
-        ctx.fillRect(box.x, box.y - 35, box.width, 35);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 14px Arial';
-        ctx.fillText('Sin registro', box.x + 5, box.y - 12);
-      } else {
-        setPersonaDetectada(null);
-      }
-    } catch (err) {
-      console.error("Error en detección:", err);
-    }
-  };
-
-  // ✅ LIMPIEZA CORRECTA DEL INTERVALO
-  if (camaraActiva && modelosListos) {
-    console.log("🎥 Iniciando detección facial cada 3 segundos");
-    
-    // ✅ Limpiar intervalo anterior si existe
-    if (intervalId.current) {
-      clearInterval(intervalId.current);
-      intervalId.current = null;
-    }
-    
-    // ✅ Crear nuevo intervalo
-    intervalId.current = setInterval(detectarRostro, 3000);
-    
-  } else {
-    // ✅ Detener cuando la cámara está inactiva
-    console.log("🛑 Deteniendo detección facial");
-    if (intervalId.current) {
-      clearInterval(intervalId.current);
-      intervalId.current = null;
-    }
-  }
-
-  // ✅ CLEANUP FUNCTION - SE EJECUTA AL DESMONTAR O CAMBIAR DEPENDENCIAS
-  return () => {
-    console.log("🧹 Limpiando intervalo de detección facial");
-    if (intervalId.current) {
-      clearInterval(intervalId.current);
-      intervalId.current = null;
-    }
-  };
-}, [camaraActiva, modelosListos]); // ✅ Solo depende de estos estados
-
-  // ====================================
-  // 4. REGISTRAR ACCESO FACIAL
-  // ====================================
-  const verificarYRegistrar = async (idPersona: string, nombreCompleto: string) => {
-    const ahora = Date.now();
-    const ultimoRegistroPersona = ultimoRegistro.current[idPersona] || 0;
-    const tiempoTranscurrido = ahora - ultimoRegistroPersona;
-    
-    if (tiempoTranscurrido >= 3000) {
-      try {
-        const fechaHoraActual = new Date();
-        const año = fechaHoraActual.getFullYear();
-        const mes = String(fechaHoraActual.getMonth() + 1).padStart(2, '0');
-        const dia = String(fechaHoraActual.getDate()).padStart(2, '0');
-        const hora = String(fechaHoraActual.getHours()).padStart(2, '0');
-        const minutos = String(fechaHoraActual.getMinutes()).padStart(2, '0');
-        const segundos = String(fechaHoraActual.getSeconds()).padStart(2, '0');
-        const fechaFormateada = `${año}-${mes}-${dia} ${hora}:${minutos}:${segundos}`;
-        
-        await axios.post('http://localhost:3000/api/acceso', {
-          persona_id: parseInt(idPersona),
-          metodo: 'Reconocimiento Facial',
-          fecha: fechaFormateada
-        });
-        
-        ultimoRegistro.current[idPersona] = ahora;
-        console.log(`✅ ACCESO REGISTRADO: ${nombreCompleto}`);
-        await cargarAccesos();
-      } catch (error) {
-        console.error("❌ Error registrando acceso:", error);
-      }
-    }
-  };
-
-  // ====================================
-  // 5. SISTEMA RFID DUAL
-  // ====================================
-  
-  // Detectar tecla Enter o escaneo rápido (Arduino)
-  useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (!rfidActivo) return;
-      
-      // Si presiona Enter, procesar el código
-      if (e.key === 'Enter' && codigoRFID.trim()) {
-        e.preventDefault();
-        procesarRFID(codigoRFID.trim(), 'fisica');
-      }
-    };
-
-    window.addEventListener('keypress', handleKeyPress);
-    return () => window.removeEventListener('keypress', handleKeyPress);
-  }, [codigoRFID, rfidActivo]);
-
-  // Autocompletar desde input oculto (Arduino enviará caracteres automáticamente)
-  useEffect(() => {
-    if (inputRFIDRef.current && rfidActivo) {
-      inputRFIDRef.current.focus();
-    }
-  }, [rfidActivo]);
-
-  const procesarRFID = async (codigo: string, tipo: 'fisica' | 'virtual') => {
     setEstadoRFID('procesando');
-    setTipoLectura(tipo);
-    setMensajeRFID(`${tipo === 'fisica' ? '💳' : '📱'} Verificando...`);
+    setMensajeRFID('🔍 Verificando...');
 
     try {
-      const response = await axios.post('http://localhost:3000/api/acceso/rfid', {
-        rfid_code: codigo
+      const response = await fetch(`${API_URL}/acceso/validar-rfid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo: codigo.trim() })
       });
 
-      if (response.data.success) {
+      const data = await response.json();
+
+      if (data.success && data.persona) {
+        // ✅ ACCESO PERMITIDO
         setEstadoRFID('exito');
-        setPersonaRFID(response.data.persona);
-        setMensajeRFID(`✅ ${response.data.mensaje}`);
+        setPersonaRFID(data.persona);
+        setMensajeRFID('✅ Acceso Permitido');
         
-        // Resetear después de 3 segundos
         if (timeoutRFID.current) clearTimeout(timeoutRFID.current);
         timeoutRFID.current = setTimeout(() => {
           setEstadoRFID('esperando');
           setPersonaRFID(null);
-          setTipoLectura(null);
-          setMensajeRFID('Esperando tarjeta o código virtual...');
+          setMensajeRFID('🔄 Conectando a Arduino...');
           setCodigoRFID('');
         }, 3000);
 
         await cargarAccesos();
+        return;
       }
-    } catch (error: any) {
-      setEstadoRFID('error');
-      setMensajeRFID(`❌ ${error.response?.data?.error || 'Tarjeta no registrada'}`);
-      
-      if (timeoutRFID.current) clearTimeout(timeoutRFID.current);
-      timeoutRFID.current = setTimeout(() => {
-        setEstadoRFID('esperando');
-        setPersonaRFID(null);
-        setTipoLectura(null);
-        setMensajeRFID('Esperando tarjeta o código virtual...');
-        setCodigoRFID('');
-      }, 3000);
+    } catch (error: any) {}
+
+    // ❌ ACCESO DENEGADO
+    setEstadoRFID('error');
+    setMensajeRFID('❌ Acceso Denegado');
+    setPersonaRFID(null);
+    
+    if (timeoutRFID.current) clearTimeout(timeoutRFID.current);
+    timeoutRFID.current = setTimeout(() => {
+      setEstadoRFID('esperando');
+      setPersonaRFID(null);
+      setMensajeRFID('🔄 Conectando a Arduino...');
+      setCodigoRFID('');
+    }, 3000);
+  };
+
+  // Detección Facial
+  useEffect(() => {
+    const detectarRostro = async () => {
+      if (!webcamRef.current?.video || !canvasRef.current) return;
+      const video = webcamRef.current.video;
+      const canvas = canvasRef.current;
+      if (video.readyState !== 4) return;
+
+      try {
+        const displaySize = { width: video.videoWidth, height: video.videoHeight };
+        canvas.width = displaySize.width;
+        canvas.height = displaySize.height;
+        faceapi.matchDimensions(canvas, displaySize);
+        const detection = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (detection && labeledDescriptors.current.length > 0) {
+          const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors.current, 0.6);
+          const match = faceMatcher.findBestMatch(detection.descriptor);
+          const box = faceapi.resizeResults(detection, displaySize).detection.box;
+
+          if (match.label !== 'unknown') {
+            const partes = match.label.split('|');
+            const tipoUsuario = partes.length >= 3 ? partes[0] : 'PERSONA';
+            const idUsuario = partes.length >= 3 ? partes[1] : partes[0];
+            const nombreMostrar = partes.length >= 3 ? partes[2] : partes[1];
+            const conf = Math.round((1 - match.distance) * 100);
+            
+            setPersonaDetectada(nombreMostrar);
+            setConfianza(conf);
+            ctx.strokeStyle = '#10b981'; ctx.lineWidth = 4; ctx.strokeRect(box.x, box.y, box.width, box.height);
+            ctx.fillStyle = '#10b981'; ctx.fillText(`${nombreMostrar} (${conf}%)`, box.x, box.y - 10);
+            verificarYRegistrar(idUsuario, nombreMostrar, conf, tipoUsuario);
+          } else {
+            setPersonaDetectada(null);
+            ctx.strokeStyle = '#ef4444'; ctx.strokeRect(box.x, box.y, box.width, box.height);
+          }
+        }
+      } catch (err) {}
+    };
+
+    if (camaraActiva && modelosListos) {
+      if (intervaloDeteccion.current) clearInterval(intervaloDeteccion.current);
+      intervaloDeteccion.current = setInterval(detectarRostro, 1500);
+    } else {
+      if (intervaloDeteccion.current) clearInterval(intervaloDeteccion.current);
+    }
+    return () => { if (intervaloDeteccion.current) clearInterval(intervaloDeteccion.current); };
+  }, [camaraActiva, modelosListos]);
+
+  const verificarYRegistrar = async (idUsuario: string, nombreCompleto: string, confianzaActual: number, tipoUsuario: string) => {
+    const claveRegistro = `${tipoUsuario}-${idUsuario}`;
+    const now = Date.now();
+    if (now - (ultimoRegistro.current[claveRegistro] || 0) > 5000) {
+      try {
+        await axios.post(`${API_URL}/acceso`, {
+          usuario_id: parseInt(idUsuario), tipo_usuario: tipoUsuario, metodo: 'Reconocimiento Facial',
+          fecha: new Date().toISOString(), foto_verificacion_base64: webcamRef.current?.getScreenshot(), confianza_facial: confianzaActual
+        });
+        ultimoRegistro.current[claveRegistro] = now;
+        await cargarAccesos();
+      } catch (e) {}
     }
   };
 
-  const simularLecturaVirtual = () => {
-    if (codigoRFID.trim()) {
-      procesarRFID(codigoRFID.trim(), 'virtual');
-    }
-  };
-
-  // ====================================
-  // 6. MANEJO DE CÁMARA
-  // ====================================
-  const iniciarCamara = () => {
-    setErrorCamara(null);
-    setCamaraActiva(true);
-  };
-
-  const detenerCamara = () => {
-    setCamaraActiva(false);
-    setPersonaDetectada(null);
-    setErrorCamara(null);
-  };
-
-  // ====================================
-  // RENDERIZADO
-  // ====================================
   return (
-    <div className="space-y-6">
+    // CAMBIO: padding más pequeño y fondo gris suave
+    <div className="space-y-4 p-4 bg-gray-50/50 min-h-screen">
       
-      {/* MÓDULOS PRINCIPALES */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
-        {/* ========== MÓDULO 1: RECONOCIMIENTO FACIAL ========== */}
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-4 text-white">
-            <h3 className="font-bold text-lg flex items-center gap-2">
-              <Camera size={20}/> Reconocimiento Facial
-            </h3>
-            <p className="text-xs text-blue-100 mt-1">{mensajeEstado}</p>
-          </div>
+      {/* TÍTULO PRINCIPAL (Opcional, para dar contexto) */}
+      <div className="flex items-center gap-2 mb-2">
+          <h2 className="text-lg font-bold text-blue-900 flex items-center gap-2">
+           <Activity className="text-orange-500" size={20}/> Monitor de Acceso
+          </h2>
+          <span className="text-[10px] text-gray-400 bg-white px-2 py-0.5 rounded-full border border-gray-200">Tiempo Real</span>
+      </div>
 
-          <div className="p-4">
-            <div className="bg-black rounded-xl overflow-hidden relative aspect-video flex items-center justify-center border-4 border-gray-800">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        
+        {/* RECONOCIMIENTO FACIAL */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          {/* HEADER AZUL + NARANJA */}
+          <div className="bg-gradient-to-r from-blue-900 to-blue-800 p-3 flex justify-between items-center text-white">
+            <h3 className="font-bold text-sm flex items-center gap-2"><Camera size={16} className="text-orange-400"/> Reconocimiento Facial</h3>
+            <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full">{mensajeEstado}</span>
+          </div>
+          
+          <div className="p-3">
+            <div className="bg-black rounded-lg overflow-hidden relative aspect-video flex items-center justify-center border-2 border-gray-800 shadow-inner">
               {camaraActiva ? (
                 <div className="relative w-full h-full">
-                  <Webcam 
-                    audio={false} 
-                    ref={webcamRef} 
-                    className="absolute w-full h-full object-cover"
-                    videoConstraints={{ width: 1280, height: 720, facingMode: "user" }}
-                    onUserMediaError={(error) => {
-                      setErrorCamara("No se pudo acceder a la cámara");
-                      setCamaraActiva(false);
-                    }}
-                  />
-                  <canvas 
-                    ref={canvasRef}
-                    className="absolute top-0 left-0 w-full h-full pointer-events-none"
-                    style={{ zIndex: 10 }}
-                  />
-                  {personaDetectada && (
-                    <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-full font-bold shadow-lg z-20 flex items-center gap-2 animate-pulse">
-                      <UserCheck size={18}/>
-                      <span className="text-sm">{personaDetectada}</span>
-                      <span className="text-xs bg-white/20 px-2 py-0.5 rounded">{confianza}%</span>
-                    </div>
-                  )}
+                  <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg" className="absolute w-full h-full object-cover" videoConstraints={{ width: 1280, height: 720 }} />
+                  <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+                  {personaDetectada && <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-green-500 text-white px-3 py-1 rounded-full font-bold text-xs shadow-lg z-20 flex gap-1 items-center animate-bounce-in"><UserCheck size={14}/> {personaDetectada}</div>}
                 </div>
               ) : (
-                <div className="text-center text-gray-500 p-8">
-                  {errorCamara ? (
-                    <>
-                      <AlertCircle size={48} className="mx-auto mb-3 text-red-500"/>
-                      <p className="text-sm font-bold text-red-500">{errorCamara}</p>
-                    </>
-                  ) : (
-                    <>
-                      <Camera size={48} className="mx-auto mb-3 opacity-50"/>
-                      <p className="text-sm font-bold">{mensajeEstado}</p>
-                      {!modelosListos && <Loader className="animate-spin mx-auto mt-3 text-blue-500" size={32} />}
-                    </>
-                  )}
+                <div className="text-center text-gray-500 p-4">
+                    <Camera size={32} className="mx-auto mb-2 opacity-30"/>
+                    <p className="text-xs font-bold text-gray-400">{mensajeEstado}</p>
+                    {!modelosListos && <Loader className="animate-spin mx-auto mt-2 text-blue-500" size={20}/>}
                 </div>
               )}
             </div>
-
-            <div className="mt-4 flex gap-2">
-              <button 
-                onClick={() => camaraActiva ? detenerCamara() : iniciarCamara()}
-                disabled={!modelosListos}
-                className={`flex-1 px-4 py-2 rounded-lg font-bold flex items-center justify-center gap-2 transition-all
-                  ${camaraActiva 
-                    ? 'bg-red-600 hover:bg-red-700 text-white' 
-                    : 'bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-400'
-                  }`}
-              >
-                {camaraActiva ? <><StopCircle size={18}/> Detener</> : <><PlayCircle size={18}/> Iniciar</>}
+            
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => setCamaraActiva(!camaraActiva)} disabled={!modelosListos} className={`flex-1 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-sm ${camaraActiva ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200' : 'bg-green-50 text-green-600 hover:bg-green-100 border border-green-200 disabled:opacity-50'}`}>
+                {camaraActiva ? <><StopCircle size={14}/> Detener Cámara</> : <><PlayCircle size={14}/> Iniciar Cámara</>}
               </button>
             </div>
           </div>
         </div>
 
-        {/* ========== MÓDULO 2: RFID DUAL (Físico + Virtual) ========== */}
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-purple-600 to-purple-700 p-4 text-white">
-            <h3 className="font-bold text-lg flex items-center gap-2">
-              <CreditCard size={20}/> Acceso RFID Dual
-            </h3>
-            <p className="text-xs text-purple-100 mt-1">Tarjeta física o celular NFC</p>
+        {/* RFID */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+          <div className={`bg-gradient-to-r p-3 text-white flex justify-between items-center ${arduinoConectado ? 'from-green-600 to-green-700' : 'from-gray-600 to-gray-700'}`}>
+            <h3 className="font-bold text-sm flex items-center gap-2"><CreditCard size={16}/> Acceso RFID</h3>
+            <p className="text-[10px] bg-black/20 px-2 py-0.5 rounded-full flex items-center gap-1"><Zap size={10}/> {arduinoConectado ? 'Conectado' : 'Desconectado'}</p>
           </div>
-
-          <div className="p-6 space-y-4">
-            
-            {/* Estado Visual */}
-            <div className={`rounded-xl p-8 text-center transition-all border-4 ${
-              estadoRFID === 'esperando' ? 'bg-gray-50 border-gray-200' :
-              estadoRFID === 'procesando' ? 'bg-blue-50 border-blue-300 animate-pulse' :
-              estadoRFID === 'exito' ? 'bg-green-50 border-green-400' :
-              'bg-red-50 border-red-400'
-            }`}>
-              {estadoRFID === 'esperando' && (
-                <>
-                  <div className="flex justify-center gap-8 mb-4">
-                    <CreditCard size={48} className="text-purple-400 animate-bounce"/>
-                    <Smartphone size={48} className="text-purple-400 animate-bounce" style={{ animationDelay: '0.2s' }}/>
-                  </div>
-                  <p className="text-gray-600 font-medium">{mensajeRFID}</p>
-                </>
-              )}
-
-              {estadoRFID === 'procesando' && (
-                <>
-                  <Loader size={48} className="mx-auto mb-4 text-blue-500 animate-spin"/>
-                  <p className="text-blue-700 font-bold">{mensajeRFID}</p>
-                </>
-              )}
-
+          
+          <div className="p-4 flex-1 flex flex-col gap-3">
+            <div className={`flex-1 rounded-lg p-4 text-center transition-all border flex flex-col items-center justify-center min-h-[140px]
+                ${estadoRFID === 'esperando' ? 'bg-gray-50 border-gray-200 border-dashed' : 
+                  estadoRFID === 'procesando' ? 'bg-blue-50 border-blue-200 animate-pulse' : 
+                  estadoRFID === 'exito' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+              
+              {estadoRFID === 'esperando' && <><CreditCard size={32} className="text-gray-300 mb-2"/><p className="text-gray-500 text-xs font-medium">{mensajeRFID}</p></>}
+              {estadoRFID === 'procesando' && <><Loader size={28} className="text-blue-500 animate-spin mb-2"/><p className="text-blue-600 text-xs font-bold">{mensajeRFID}</p></>}
+              
               {estadoRFID === 'exito' && personaRFID && (
-                <>
-                  <UserCheck size={64} className="mx-auto mb-4 text-green-500"/>
-                  <p className="text-2xl font-bold text-gray-800 mb-2">
-                    {personaRFID.nombre}
-                  </p>
-                  <p className="text-green-600 font-bold mb-3">{mensajeRFID}</p>
-                  <div className="flex items-center justify-center gap-2">
-                    {tipoLectura === 'fisica' ? (
-                      <span className="bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-sm font-bold flex items-center gap-1">
-                        <CreditCard size={14}/> Tarjeta Física
-                      </span>
-                    ) : (
-                      <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-bold flex items-center gap-1">
-                        <Smartphone size={14}/> NFC Virtual
-                      </span>
-                    )}
-                  </div>
-                </>
+                <div className="animate-bounce-in">
+                    <CheckCircle size={32} className="text-green-500 mx-auto mb-1"/>
+                    <p className="text-sm font-bold text-green-800">{personaRFID.primer_nombre} {personaRFID.primer_apellido}</p>
+                    <p className="text-[10px] text-green-600 font-bold uppercase mt-1">{mensajeRFID}</p>
+                </div>
               )}
-
+              
               {estadoRFID === 'error' && (
-                <>
-                  <AlertCircle size={64} className="mx-auto mb-4 text-red-500"/>
-                  <p className="text-red-600 font-bold">{mensajeRFID}</p>
-                </>
+                <div className="animate-shake">
+                    <XCircle size={32} className="text-red-500 mx-auto mb-1"/>
+                    <p className="text-red-600 text-xs font-bold">{mensajeRFID}</p>
+                </div>
               )}
             </div>
-
-            {/* Input Oculto para Arduino */}
+            
+            {/* Input RFID con borde naranja al enfocar */}
             <input 
-              ref={inputRFIDRef}
-              type="text"
-              value={codigoRFID}
-              onChange={(e) => setCodigoRFID(e.target.value)}
-              className="w-full p-3 border-2 border-purple-300 rounded-lg text-center font-mono text-lg focus:outline-none focus:border-purple-500"
-              placeholder="Esperando escaneo..."
-              autoFocus
+                ref={inputRFIDRef} 
+                type="text" 
+                value={codigoRFID} 
+                onChange={(e) => setCodigoRFID(e.target.value)} 
+                className="w-full p-2 border border-gray-300 rounded-lg text-center font-mono text-xs bg-white focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none transition-all" 
+                placeholder="Escanee tarjeta aquí..." 
+                autoFocus 
             />
-
-            {/* Botón Manual para Simulación Virtual */}
-            <button
-              onClick={simularLecturaVirtual}
-              disabled={!codigoRFID.trim() || estadoRFID === 'procesando'}
-              className="w-full bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Smartphone size={18}/>
-              Simular NFC Virtual
-            </button>
-
-            {/* Info */}
-            <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 border border-gray-200">
-              <p className="font-bold mb-1 flex items-center gap-1">
-                <Zap size={12} className="text-yellow-500"/> Modos de Acceso:
-              </p>
-              <ul className="space-y-1">
-                <li>• <strong>Arduino:</strong> Acerca la tarjeta RFID al lector</li>
-                <li>• <strong>Celular:</strong> Ingresa el código y presiona el botón</li>
-              </ul>
-            </div>
           </div>
         </div>
       </div>
 
-      {/* MONITOR DE ACCESOS */}
-      <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-        <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
-          <h3 className="font-bold text-gray-800 flex items-center gap-2">
-            <Clock size={18}/> Monitor en Vivo
-          </h3>
-          <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-bold animate-pulse">
-            LIVE • {accesos.length} registros
+      {/* MONITOR VIVO */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden border-t-4 border-orange-500">
+        <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+          <h3 className="font-bold text-blue-900 text-sm flex items-center gap-2"><Clock size={16} className="text-orange-500"/> Monitor en Vivo</h3>
+          <span className="text-[10px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-bold border border-green-100 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span> LIVE
           </span>
         </div>
         
-        <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-64 overflow-y-auto">
+        <div className="p-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-56 overflow-y-auto custom-scrollbar">
           {accesos.length === 0 ? (
-            <div className="col-span-full flex flex-col items-center justify-center py-8 text-gray-400">
-              <UserCheck size={48} className="mb-2"/>
-              <p className="text-sm">Esperando accesos...</p>
+            <div className="col-span-full text-center py-6 text-gray-300 flex flex-col items-center">
+                <UserCheck size={32} className="mb-1 opacity-50"/>
+                <p className="text-xs">Esperando accesos...</p>
             </div>
           ) : (
             accesos.map((acc) => (
-              <div 
-                key={acc.id} 
-                className="flex items-center gap-3 p-3 hover:bg-blue-50 rounded-lg transition-all border border-gray-100"
-              >
-                {acc.foto_url ? (
-                  <img 
-                    src={acc.foto_url} 
-                    className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm" 
-                    alt="Foto"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center font-bold text-gray-500">
+              <div key={acc.id} className="flex items-center gap-2 p-2 hover:bg-blue-50 rounded-lg border border-gray-100 transition-colors group">
+                <div className="w-9 h-9 rounded-full bg-blue-900 text-white flex items-center justify-center font-bold text-xs shadow-sm ring-1 ring-orange-200">
                     {acc.primer_nombre?.[0]}
-                  </div>
-                )}
-                
+                </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-800 truncate text-sm">
-                    {acc.primer_nombre} {acc.primer_apellido}
-                  </p>
-                  <p className="text-xs text-gray-500 truncate">{acc.tipo_persona}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xs font-bold text-purple-600">
-                      {horaEcuador(acc.fecha)}
-                    </span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded border bg-blue-50 text-blue-600 border-blue-100">
-                      {acc.metodo === 'Reconocimiento Facial' ? '📸' : '💳'} {acc.metodo}
-                    </span>
-                  </div>
+                    <p className="font-bold text-gray-700 truncate text-xs group-hover:text-blue-900">{acc.primer_nombre} {acc.primer_apellido}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] font-mono text-gray-500">{horaEcuador(acc.fecha)}</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded border bg-white border-gray-200 text-gray-600">
+                            {acc.metodo.includes('Facial') ? '📸 Facial' : '💳 RFID'}
+                        </span>
+                    </div>
                 </div>
               </div>
             ))
           )}
+        </div>
+      </div>
+
+      {/* DEBUG / INFO */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-[10px] text-gray-500 space-y-1">
+        <div className="font-bold text-blue-900 uppercase tracking-wider flex items-center gap-2">
+            <Activity size={12}/> Estado del Sistema
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+          <div>
+            <p>✅ Modelos IA: <span className={modelosListos ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{modelosListos ? 'CARGADOS' : 'CARGANDO...'}</span></p>
+            <p>👥 Personas: {totalPersonas}</p>
+            <p>🚶 Visitantes: {totalVisitantes}</p>
+          </div>
+          <div>
+            <p>📊 Rostros: {labeledDescriptors.current.length}</p>
+            <p>🤖 Arduino: <span className={`font-bold ${arduinoConectado ? 'text-green-600' : 'text-red-600'}`}>{arduinoConectado ? 'ONLINE' : 'OFFLINE'}</span></p>
+            <p>🔤 Buffer: <span className='font-mono bg-white border px-1 rounded text-gray-700'>{codigoRFID || '---'}</span></p>
+          </div>
         </div>
       </div>
     </div>

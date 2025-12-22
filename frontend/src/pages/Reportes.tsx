@@ -1,9 +1,9 @@
 import axios from 'axios';
-import { FileDown, FileSpreadsheet, Users } from 'lucide-react';
+import { FileDown, FileSpreadsheet, Users, Download, HardHat } from 'lucide-react';
 
 export default function Reportes() {
 
-  // Función genérica para convertir datos a CSV y descargar
+  // Función genérica para convertir datos a CSV y descargar (LÓGICA INTACTA)
   const descargarCSV = (data: any[], filename: string) => {
     if (!data || data.length === 0) {
         alert("No hay datos para exportar en este reporte.");
@@ -35,7 +35,6 @@ export default function Reportes() {
     try {
       const res = await axios.get('http://localhost:3000/api/personas');
       
-      // Verificamos si la respuesta es directa o tiene propiedad 'personas'
       const data = Array.isArray(res.data) ? res.data : (res.data.personas || []);
 
       if(data.length === 0) {
@@ -60,16 +59,11 @@ export default function Reportes() {
     }
   };
 
-  // 2. Exportar Historial de Accesos (CORREGIDO PARA TU BACKEND)
+  // 2. Exportar Historial de Accesos
   const exportarAccesos = async () => {
     try {
-      console.log("Solicitando historial...");
       const res = await axios.get('http://localhost:3000/api/acceso/historial');
       
-      console.log("Respuesta Backend:", res.data); // Para depurar
-
-      // ✅ AQUÍ ESTÁ EL CAMBIO CLAVE:
-      // Tu backend devuelve { success: true, accesos: [...] }, así que leemos .accesos
       const listaAccesos = res.data.accesos; 
 
       if (!listaAccesos || !Array.isArray(listaAccesos) || listaAccesos.length === 0) {
@@ -77,7 +71,6 @@ export default function Reportes() {
         return;
       }
 
-      // Mapeamos los datos
       const limpio = listaAccesos.map((a: any) => ({
         Fecha: new Date(a.fecha).toLocaleDateString(),
         Hora: new Date(a.fecha).toLocaleTimeString(),
@@ -95,42 +88,47 @@ export default function Reportes() {
   };
 
   return (
-    <div className="space-y-6 pb-10">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-800">Centro de Reportes</h2>
-        <p className="text-gray-500 text-sm">Generación de archivos CSV para auditoría y control.</p>
+    <div className="p-4 space-y-4">
+      
+      {/* HEADER DE PÁGINA */}
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-3 bg-white p-4 rounded-xl shadow-sm border border-gray-100 border-t-4 border-orange-500">
+        <div>
+          <h2 className="text-xl font-bold text-blue-900 flex items-center gap-2">
+            <Download className="text-orange-500" size={20}/> Centro de Reportes
+          </h2>
+          <p className="text-gray-500 text-xs mt-0.5">Generación de archivos CSV para auditoría y control.</p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         
-        {/* Tarjeta Usuarios */}
-        <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 text-center hover:shadow-md transition-all group">
-          <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
-            <Users size={40} />
+        {/* Tarjeta Usuarios - Tema Azul */}
+        <div className="bg-white p-5 rounded-xl shadow-md border border-gray-100 text-center hover:shadow-lg transition-all group border-l-4 border-l-blue-900">
+          <div className="w-16 h-16 bg-blue-100 text-blue-900 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-105 transition-transform">
+            <Users size={32} />
           </div>
-          <h3 className="text-xl font-bold text-gray-800 mb-2">Base de Datos de Personal</h3>
-          <p className="text-gray-500 text-sm mb-8 px-4">
-            Descarga la lista completa de Estudiantes, Docentes y Administrativos, incluyendo sus estados y códigos de tarjeta.
+          <h3 className="text-lg font-bold text-blue-900 mb-2">Base de Datos de Personal</h3>
+          <p className="text-gray-500 text-sm mb-6 px-2">
+            Lista completa de Estudiantes, Docentes y Admins, incluyendo estados y códigos RFID.
           </p>
-          <button onClick={exportarUsuarios} className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold flex items-center justify-center gap-2 mx-auto hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200 cursor-pointer">
-            <FileDown size={20}/> Descargar CSV
+          <button onClick={exportarUsuarios} className="bg-gradient-to-r from-blue-900 to-blue-800 text-white px-6 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 mx-auto hover:shadow-lg transition-colors shadow-blue-400/50 text-sm">
+            <FileDown size={18}/> Descargar CSV
           </button>
         </div>
 
-        {/* Tarjeta Accesos */}
-        <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 text-center hover:shadow-md transition-all group">
-          <div className="w-20 h-20 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
-            <FileSpreadsheet size={40} />
+        {/* Tarjeta Accesos - Tema Verde Éxito */}
+        <div className="bg-white p-5 rounded-xl shadow-md border border-gray-100 text-center hover:shadow-lg transition-all group border-l-4 border-l-green-600">
+          <div className="w-16 h-16 bg-green-100 text-green-700 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-105 transition-transform">
+            <FileSpreadsheet size={32} />
           </div>
-          <h3 className="text-xl font-bold text-gray-800 mb-2">Historial de Asistencia</h3>
-          <p className="text-gray-500 text-sm mb-8 px-4">
-            Reporte detallado de todos los ingresos al campus. Incluye fecha exacta, hora, nombre de la persona y método utilizado.
+          <h3 className="text-lg font-bold text-gray-800 mb-2">Historial de Asistencia</h3>
+          <p className="text-gray-500 text-sm mb-6 px-2">
+            Reporte detallado de todos los ingresos al campus. Incluye fecha, hora, persona y método.
           </p>
-          <button onClick={exportarAccesos} className="bg-green-600 text-white px-8 py-3 rounded-xl font-bold flex items-center justify-center gap-2 mx-auto hover:bg-green-700 transition-colors shadow-lg shadow-green-200 cursor-pointer">
-            <FileDown size={20}/> Descargar CSV
+          <button onClick={exportarAccesos} className="bg-gradient-to-r from-emerald-600 to-green-600 text-white px-6 py-2.5 rounded-lg font-bold flex items-center justify-center gap-2 mx-auto hover:shadow-lg transition-colors shadow-green-400/50 text-sm">
+            <FileDown size={18}/> Descargar CSV
           </button>
         </div>
-
       </div>
     </div>
   );

@@ -3,15 +3,15 @@ import Sidebar from '../components/Sidebar';
 import Header from '../components/Header';
 
 export default function DashboardLayout() {
-  // Protección: Si no está logueado, lo mandamos al login
-  const isAuthenticated = localStorage.getItem('usuario_unemi');
+  // 🔥 CAMBIO CLAVE: sessionStorage para verificar sesión por pestaña
+  const isAuthenticated = sessionStorage.getItem('usuario_unemi');
 
   if (!isAuthenticated) {
     return <Navigate to="/" />;
   }
 
   return (
-    <div className="flex bg-unemi-bg min-h-screen font-sans">
+    <div className="flex bg-gray-50 min-h-screen font-sans">
       {/* Menú Fijo a la Izquierda */}
       <Sidebar />
 

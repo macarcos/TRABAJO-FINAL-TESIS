@@ -1,0 +1,275 @@
+/*
+ * Sistema de Lectura RFID + NFC para Control de Acceso Universitario
+ * Módulo: RFID RC522 + Servomotor
+ * Comunicación: Serial (USB)
+ * 
+ * CONEXIONES:
+ * RFID RC522    →    Arduino UNO
+ * ─────────────────────────────
+ * SDA (SS)      →    Pin 10
+ * SCK           →    Pin 13
+ * MOSI          →    Pin 11
+ * MISO          →    Pin 12
+ * RST           →    Pin 9
+ * 3.3V          →    3.3V
+ * GND           →    GND
+ * 
+ * Servomotor    →    Arduino
+ * ─────────────────────────────
+ * ROJO (5V)     →    5V
+ * MARRÓN (GND)  →    GND
+ * NARANJA (PWM) →    Pin 6 (SERVO_PIN)
+ */
+
+#include <SPI.h>
+#include <MFRC522.h>
+#include <Servo.h>
+
+// Definición de pines
+#define SS_PIN 10
+#define RST_PIN 9
+#define SERVO_PIN 6
+
+// Crear instancia del lector RFID y servo
+MFRC522 rfid(SS_PIN, RST_PIN);
+Servo servoMotor;
+
+// Configuración del servo
+const int PUERTA_CERRADA = 0;
+const int PUERTA_ABIERTA = 100;
+const int TIEMPO_ABIERTO = 6000;
+
+// Variables
+String tagID = "";
+unsigned long lastReadTime = 0;
+const unsigned long DEBOUNCE_TIME = 2000;
+
+void setup() {
+  // Iniciar comunicación serial
+  Serial.begin(9600);
+  delay(1000);
+  
+  // Iniciar SPI
+  SPI.begin();
+  
+  // Iniciar módulo RFID
+  rfid.PCD_Init();
+  
+  // Iniciar servomotor
+  servoMotor.attach(SERVO_PIN);
+  servoMotor.write(PUERTA_CERRADA);
+  
+  // Mensaje de inicio
+  Serial.println("=== SISTEMA RFID + NFC INICIADO ===");
+  Serial.println("Esperando tarjeta RFID o teléfono NFC...");
+  
+  // LED indicador
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void loop() {
+  // Verificar comandos del servidor
+  if (Serial.available() > 0) {
+    String comando = Serial.readStringUntil('\n');
+    comando.trim();
+    
+    if (comando == "ACCESO_AUTORIZADO") {
+      abrirPuerta();
+    } else if (comando == "ACCESO_DENEGADO") {
+      blinkLED(5, 100);
+    }
+  }
+  
+  // Verificar si hay una tarjeta presente
+  if (!rfid.PICC_IsNewCardPresent()) {
+    return;
+  }
+  
+  // Verificar si se puede leer la tarjeta
+  if (!rfid.PICC_ReadCardSerial()) {
+    return;
+  }
+  
+  // Control anti-rebote
+  unsigned long currentTime = millis();
+  if (currentTime - lastReadTime < DEBOUNCE_TIME) {
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+    return;
+  }
+  
+  lastReadTime = currentTime;
+  
+  // Leer UID de la tarjeta
+  tagID = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    tagID += String(rfid.uid.uidByte[i], HEX);
+  }
+  tagID.toUpperCase();
+  
+  // ===== DETECTAR TIPO DE LECTURA =====
+  String tipoDetectado = detectarTipo(rfid.uid.size);
+  
+  // ===== ENVIAR CON PREFIJO =====
+  String mensaje = tipoDetectado + ":" + tagID;
+  Serial.println(mensaje);
+  
+  // Debug para el Monitor Serie
+  Serial.print("DEBUG - Tipo: ");
+  Serial.print(tipoDetectado);
+  Serial.print(" | UID Size: ");
+  Serial.print(rfid.uid.size);
+  Serial.print(" | Código: ");
+  Serial.println(tagID);
+  
+  // Indicador visual
+  blinkLED(2, 100);
+  
+  // Detener lectura
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+}
+
+// ===== FUNCIÓN PARA DETECTAR TIPO DE LECTURA =====
+String detectarTipo(byte uidLength) {
+  // Tarjetas MIFARE físicas típicamente tienen 4 bytes
+  // Teléfonos NFC típicamente tienen 7 bytes o más
+  
+  if (uidLength == 4) {
+    return "RFID";  // Tarjeta física estándar (4 bytes)
+  } else if (uidLength == 7) {
+    return "NFC";   // Teléfono o etiqueta NFC (7 bytes)
+  } else if (uidLength == 10) {
+    return "NFC";   // Teléfono con UID largo (10 bytes)
+  }
+  
+  return "UNKNOWN";
+}
+
+// Función para abrir la puerta
+void abrirPuerta() {
+  Serial.println("PUERTA_ABRIENDO");
+  
+  servoMotor.write(PUERTA_ABIERTA);
+  digitalWrite(LED_BUILTIN, HIGH);
+  
+  delay(TIEMPO_ABIERTO);
+  
+  servoMotor.write(PUERTA_CERRADA);
+  digitalWrite(LED_BUILTIN, LOW);
+  
+  Serial.println("PUERTA_CERRADA");
+}
+
+// Función para parpadear LED
+void blinkLED(int times, int delayMs) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delayMs);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delayMs);
+  }
+}
+
+/*
+╔════════════════════════════════════════════════════════════╗
+║              FORMATO DE SALIDA ESPERADO                   ║
+╠════════════════════════════════════════════════════════════╣
+║                                                            ║
+║  RFID:4F5E887F      ← Tarjeta física (4 bytes)           ║
+║  NFC:048A5C927F01   ← Teléfono/billetera (7+ bytes)      ║
+║                                                            ║
+║  El sistema web recibe y procesa automáticamente           ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝
+*/
+
+
+
+
+
+
+
+-----------------------------------------------
+
+
+
+#include <SPI.h>
+#include <MFRC522.h>
+#include <Servo.h>
+
+#define SS_PIN 10
+#define RST_PIN 9
+#define SERVO_PIN 6
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+Servo servoMotor;
+
+const int PUERTA_CERRADA = 0;
+const int PUERTA_ABIERTA = 100;
+const int TIEMPO_ABIERTO = 6000;
+
+unsigned long lastRead = 0;
+const unsigned long DELAY_READ = 2000;
+
+void setup() {
+  Serial.begin(9600);
+  SPI.begin();
+  rfid.PCD_Init();
+
+  servoMotor.attach(SERVO_PIN);
+  servoMotor.write(PUERTA_CERRADA);
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  Serial.println("SYSTEM READY");
+}
+
+void loop() {
+
+  // si el servidor responde
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+
+    if (cmd == "OPEN") {
+      abrirPuerta();
+    }
+  }
+
+  // si no hay tarjeta/telefono cerca, salir
+  if (!rfid.PICC_IsNewCardPresent()) return;
+  if (!rfid.PICC_ReadCardSerial()) return;
+
+  unsigned long ahora = millis();
+  if (ahora - lastRead < DELAY_READ) return;
+
+  lastRead = ahora;
+
+  // YA NO ENVIAMOS UID
+  Serial.println("DEVICE_DETECTED");
+
+  blink(2, 70);
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+}
+
+void abrirPuerta() {
+  servoMotor.write(PUERTA_ABIERTA);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(TIEMPO_ABIERTO);
+  servoMotor.write(PUERTA_CERRADA);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void blink(int n, int d) {
+  for (int i = 0; i < n; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(d);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(d);
+  }
+}

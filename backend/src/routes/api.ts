@@ -6,8 +6,10 @@ import {
   eliminarPersona, 
   actualizarPersona, 
   cambiarPassword,
-  obtenerVectoresFaciales,  // ✅ NUEVO
-  buscarPorRFID              // ✅ NUEVO
+  obtenerVectoresFaciales,
+  buscarPorRFID,
+  obtenerNotificaciones,      // <--- IMPORTAR
+  marcarNotificacionesLeidas  // <--- IMPORTAR
 } from '../controllers/userController';
 
 import { 
@@ -15,33 +17,46 @@ import {
   obtenerUltimosAccesos, 
   obtenerHistorialCompleto, 
   borrarHistorial,
-  verificarAccesoPorRFID,    // ✅ NUEVO
-  obtenerEstadisticas,        // ✅ NUEVO
-  obtenerGraficos 
+  verificarAccesoPorRFID,
+  validarRFID,
+  obtenerEstadisticas,
+  obtenerGraficos
 } from '../controllers/accesoController';
+
+import visitantesRoutes from './visitantes';
+import matriculasRoutes from './matriculas';
 
 const router = Router();
 
-// Rutas de Usuarios
+// USUARIOS
 router.post('/login', login);
 router.post('/registrar', registrar);
 router.get('/personas', obtenerPersonas);
 router.delete('/personas/:id', eliminarPersona);
 router.put('/personas/:id', actualizarPersona);
 router.post('/cambiar-pass', cambiarPassword);
+router.get('/vectores-faciales', obtenerVectoresFaciales);
+router.get('/rfid/:rfid_code', buscarPorRFID);
 
-// ✅ NUEVAS RUTAS PARA RECONOCIMIENTO
-router.get('/vectores-faciales', obtenerVectoresFaciales);  // Para comparación facial
-router.get('/rfid/:rfid_code', buscarPorRFID);              // Buscar por RFID
+// NOTIFICACIONES (CAMPANITA)
+router.get('/notificaciones/:id', obtenerNotificaciones);
+router.put('/notificaciones/leer/:id', marcarNotificacionesLeidas);
 
-// Rutas de Accesos
+// MATRÍCULAS
+router.use('/matriculas', matriculasRoutes);
+
+// ACCESOS
 router.post('/acceso', registrarAcceso);
 router.get('/acceso/ultimos', obtenerUltimosAccesos);
 router.get('/acceso/historial', obtenerHistorialCompleto);
 router.delete('/acceso/historial', borrarHistorial);
+router.post('/acceso/validar-rfid', validarRFID); // RFID Principal
+router.post('/acceso/rfid', verificarAccesoPorRFID);
+router.get('/acceso/estadisticas', obtenerEstadisticas);
+router.get('/acceso/graficos', obtenerGraficos);
+router.get('/dashboard/stats', obtenerGraficos);
 
-// ✅ NUEVAS RUTAS DE ACCESO
-router.post('/acceso/rfid', verificarAccesoPorRFID);        // Verificar RFID desde Arduino
-router.get('/acceso/estadisticas', obtenerEstadisticas);    // Estadísticas
-router.get('/dashboard/stats', obtenerGraficos );
+// VISITANTES
+router.use('/visitantes', visitantesRoutes);
+
 export default router;

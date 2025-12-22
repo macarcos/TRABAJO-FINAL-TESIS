@@ -10,8 +10,9 @@ import ListaAccesos from './pages/ListaAccesos';
 import Dashboard from './pages/Dashboard';
 import Reportes from './pages/Reportes';
 import MiPerfil from './pages/MiPerfil';
-
-// ✅ 1. IMPORTAMOS LA NUEVA PÁGINA
+import SolicitudVisitante from './pages/SolicitudVisitantes';
+import PanelVisitantes from './pages/PanelVisitantes';
+import ECampus from './pages/ECampus';
 import ConexionArduino from './pages/ConexionArduino';
 
 function App() {
@@ -20,27 +21,35 @@ function App() {
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/cambiar-password" element={<ForzarCambioPassword />} />
+        <Route path="/ecampus" element={<ECampus />} />
 
+        {/* RUTAS PÚBLICAS */}
+        <Route path="/solicitar-acceso" element={<SolicitudVisitante />} />
+        
         <Route path="/dashboard" element={<DashboardLayout />}>
-          
+
           {/* RUTA PRINCIPAL (DASHBOARD) */}
           <Route index element={<Dashboard />} />
 
+          {/* VISITANTES */}
+          <Route path="visitantes" element={<PanelVisitantes />} />
+          <Route path="panel-visitantes" element={<PanelVisitantes />} />
+
+          {/* PERSONAS Y ACCESO */}
           <Route path="lista" element={<ListaPersonas />} />
           <Route path="registro" element={<RegistroPersonas />} />
           <Route path="admins" element={<GestionAdmins />} />
           <Route path="acceso" element={<ControlAcceso />} />
           <Route path="historial" element={<ListaAccesos />} />
           
-          {/* ✅ 2. AGREGAMOS LA RUTA NUEVA AQUÍ */}
+          {/* ARDUINO Y OTROS */}
           <Route path="arduino" element={<ConexionArduino />} />
-          {/* ---------------------------------- */}
-
           <Route path="reportes" element={<Reportes />} />
           <Route path="perfil" element={<MiPerfil />} />
 
         </Route>
         
+        {/* Ruta comodín - redirige a inicio si no existe */}
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </BrowserRouter>
