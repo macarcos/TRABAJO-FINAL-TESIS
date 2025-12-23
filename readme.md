@@ -29,11 +29,16 @@ Creamos una rama "espejo" idéntica a la actual y la subimos a GitHub.
 
 # Crear rama de respaldo y moverse a ella
 
-// git checkout -b backup-rfid-funcionando
+// git checkout -b backup-rfid-funcionando 
+
+la parte de <backup-rfid-funcionando> pyede ser cambiado por ejemplo 
+git checkout -b respaldo-tesis-martes
 
 # Subir este respaldo a la nube (GitHub)
 
 // git push origin backup-rfid-funcionando
+
+asi mismo se pone el mismo nombre de arriba en la parte <backup-rfid-funcionando>
 
 ¿Para qué sirve? Funciona como un "Punto de Guardado" en un videojuego. Si en el futuro rompes el código intentando hacer el Login, siempre podrás descargar esta rama (backup-rfid-funcionando) y volver a tener el sistema funcionando perfecto tal como está hoy.
 
@@ -41,6 +46,7 @@ Paso 3: Preparar el terreno para lo nuevo
 Volvemos a la rama principal para usarla como base limpia.
 
 # Regresar a la rama principal
+
 // git checkout main
 
 # (Opcional) Asegurar que main tenga lo último de la nube
