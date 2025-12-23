@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, memo } from 'react';
 import axios from 'axios';
-import { CheckCircle2, XCircle, Eye, Loader, History, X, AlertCircle, Download, Camera, FileText, Upload } from 'lucide-react';
+import { CheckCircle2, XCircle, Eye, Loader, History, X, AlertCircle, Download, Camera, FileText, Trash2, Clock, RotateCcw, AlertTriangle } from 'lucide-react';
 
 interface Solicitud {
   id: number;
@@ -13,14 +13,15 @@ interface Solicitud {
   descripcion: string;
   foto_base64?: string;
   fecha_solicitud: string;
+  fecha_expiracion?: string;
+  razon_rechazo?: string;
   documento_base64?: string;
   nombre_documento?: string;
+  total_rechazados?: number;
+  total_aprobados?: number;
 }
 
-// ============================================================================
-// 🔥 COMPONENTE OPTIMIZADO: IMAGEN CON LAZY LOADING
-// Solo carga la imagen cuando es visible en pantalla (mejora rendimiento 10x)
-// ============================================================================
+// COMPONENTE OPTIMIZADO: IMAGEN CON LAZY LOADING
 const ImagenLazy = memo(({ src, alt, className }: { src: string; alt: string; className: string }) => {
   const [cargada, setCargada] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -28,8 +29,6 @@ const ImagenLazy = memo(({ src, alt, className }: { src: string; alt: string; cl
 
   useEffect(() => {
     if (!imgRef.current) return;
-
-    // IntersectionObserver: detecta cuando el elemento entra en pantalla
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
@@ -37,9 +36,8 @@ const ImagenLazy = memo(({ src, alt, className }: { src: string; alt: string; cl
           observer.disconnect();
         }
       },
-      { rootMargin: '100px' } // Precarga 100px antes
+      { rootMargin: '100px' }
     );
-
     observer.observe(imgRef.current);
     return () => observer.disconnect();
   }, []);
@@ -47,14 +45,12 @@ const ImagenLazy = memo(({ src, alt, className }: { src: string; alt: string; cl
   return (
     <div ref={imgRef} className={className}>
       {!visible ? (
-        // Placeholder mientras no sea visible
-        <div className="w-full h-full bg-gradient-to-br from-gray-200 to-gray-300 animate-pulse rounded-lg" />
+        <div className="w-full h-full bg-gray-200 animate-pulse rounded-lg" />
       ) : (
         <>
           {!cargada && (
-            // Loading spinner mientras carga
-            <div className="w-full h-full bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg flex items-center justify-center">
-              <Loader size={16} className="text-blue-500 animate-spin" />
+            <div className="w-full h-full bg-blue-50 rounded-lg flex items-center justify-center">
+              <Loader size={14} className="text-[#1e3a8a] animate-spin" />
             </div>
           )}
           <img
@@ -78,7 +74,15 @@ export default function PanelVisitantes() {
   const [procesando, setProcesando] = useState(false);
   const [filter, setFilter] = useState<'Todos' | 'Pendiente' | 'Aprobado' | 'Rechazado'>('Pendiente');
   
-  // ESTADOS DE NOTIFICACIÓN TOAST
+  // ESTADOS PARA ELIMINACIÓN MASIVA
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteType, setDeleteType] = useState<'Rechazado' | 'Aprobado' | 'Expirado' | 'Todo' | null>(null);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  
+  // ESTADOS PARA ELIMINACIÓN INDIVIDUAL
+  const [showSingleDeleteModal, setShowSingleDeleteModal] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<number | null>(null);
+
   const [mensaje, setMensaje] = useState({ tipo: '', texto: '' });
   const [showToast, setShowToast] = useState(false);
 
@@ -108,17 +112,35 @@ export default function PanelVisitantes() {
     }
   };
 
+  // 1. CONFIRMAR (ABRIR MODAL BONITO)
+  const confirmarEliminarUno = (id: number) => {
+    setItemToDelete(id);
+    setShowSingleDeleteModal(true);
+  };
+
+  // 2. PROCEDER (LLAMADA A LA API)
+  const procederEliminarUno = async () => {
+    if (!itemToDelete) return;
+    
+    setProcesando(true);
+    try {
+      await axios.delete(`http://localhost:3000/api/visitantes/${itemToDelete}`);
+      lanzarToast('success', '🗑️ Registro eliminado correctamente');
+      cargarSolicitudes();
+    } catch (error) {
+      lanzarToast('error', 'Error 404: Verifica tu Backend');
+    } finally {
+      setProcesando(false);
+      setShowSingleDeleteModal(false);
+      setItemToDelete(null);
+    }
+  };
+
   const aprobar = async (id: number) => {
     setProcesando(true);
     try {
-      const usuarioData = sessionStorage.getItem('usuario_unemi'); 
-      const usuario = usuarioData ? JSON.parse(usuarioData) : null;
-
-      await axios.put(`http://localhost:3000/api/visitantes/${id}/aprobar`, {
-        admin_id: usuario?.id || 1
-      });
-
-      lanzarToast('success', 'Solicitud aprobada y acceso habilitado');
+      await axios.put(`http://localhost:3000/api/visitantes/${id}/aprobar`);
+      lanzarToast('success', '✅ Acceso habilitado por 24 horas');
       setSelectedSolicitud(null);
       cargarSolicitudes();
     } catch (error) {
@@ -133,14 +155,10 @@ export default function PanelVisitantes() {
       lanzarToast('error', 'Debes escribir una razón de rechazo');
       return;
     }
-
     setProcesando(true);
     try {
-      await axios.put(`http://localhost:3000/api/visitantes/${id}/rechazar`, {
-        razon_rechazo: razon
-      });
-
-      lanzarToast('success', 'Solicitud rechazada y notificada');
+      await axios.put(`http://localhost:3000/api/visitantes/${id}/rechazar`, { razon_rechazo: razon });
+      lanzarToast('success', '✅ Solicitud rechazada correctamente');
       setSelectedSolicitud(null);
       setRazon('');
       cargarSolicitudes();
@@ -151,243 +169,296 @@ export default function PanelVisitantes() {
     }
   };
 
-  const solicitudesFiltradas = solicitudes.filter(s => 
-    filter === 'Todos' ? true : s.estado === filter
-  );
+  const corregirDecision = async (id: number) => {
+    setProcesando(true);
+    try {
+        await axios.put(`http://localhost:3000/api/visitantes/${id}/corregir`);
+        lanzarToast('success', '🔄 Solicitud abierta para nueva decisión');
+        setSelectedSolicitud(null);
+        cargarSolicitudes();
+    } catch (error) {
+        lanzarToast('error', 'No se pudo corregir');
+    } finally {
+        setProcesando(false);
+    }
+  };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader className="animate-spin text-blue-900" size={32} />
-      </div>
-    );
-  }
+  const ejecutarEliminacionMasiva = async () => {
+    if (!deleteType) return;
+    setProcesando(true);
+    try {
+      const usuarioData = sessionStorage.getItem('usuario_unemi');
+      const admin = usuarioData ? JSON.parse(usuarioData) : { id: 1 };
+      const res = await axios.post('http://localhost:3000/api/visitantes/eliminar', { tipo: deleteType, admin_id: admin.id });
+      if (res.data.success === false) {
+          lanzarToast('error', res.data.message);
+      } else {
+          lanzarToast('success', res.data.message);
+      }
+      setShowDeleteModal(false);
+      setShowConfirmDelete(false);
+      cargarSolicitudes();
+    } catch (error) {
+      lanzarToast('error', 'Error al eliminar historial');
+    } finally {
+      setProcesando(false);
+    }
+  };
+
+  const solicitudesFiltradas = solicitudes.filter(s => filter === 'Todos' ? true : s.estado === filter);
+
+  if (loading) return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-900" size={28} /></div>;
 
   return (
-    <div className="space-y-4 p-4 relative">
-
+    <div className="space-y-2.5 relative">
+      
       {/* TOAST NOTIFICACIÓN */}
       {mensaje.texto && (
-        <div 
-            className={`fixed top-20 right-4 z-50 shadow-xl rounded-lg p-3 w-72 border-l-4 flex items-center justify-between gap-3 bg-white 
-            transition-all duration-500 ease-in-out transform 
-            ${showToast ? 'translate-x-0 opacity-100' : 'translate-x-[150%] opacity-0'}
-            ${mensaje.tipo === 'success' ? 'border-green-500 text-gray-800' : 'border-red-500 text-gray-800'}`}
-        >
-            <div className="flex items-center gap-3">
-              <div className={`p-1.5 rounded-full ${mensaje.tipo === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                {mensaje.tipo === 'success' ? <CheckCircle2 size={18}/> : <AlertCircle size={18}/>}
+        <div className={`fixed top-14 right-3 z-50 shadow-lg rounded-md p-2 w-56 border-l-4 flex items-center justify-between gap-2 bg-white transition-all duration-500 transform ${showToast ? 'translate-x-0 opacity-100' : 'translate-x-[150%] opacity-0'} ${mensaje.tipo === 'success' ? 'border-green-500 text-gray-800' : 'border-red-500 text-gray-800'}`}>
+            <div className="flex items-center gap-1.5">
+              <div className={`p-0.5 rounded-full ${mensaje.tipo === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                {mensaje.tipo === 'success' ? <CheckCircle2 size={14}/> : <AlertCircle size={14}/>}
               </div>
               <div>
-                <h4 className="font-bold text-xs">{mensaje.tipo === 'success' ? '¡Éxito!' : 'Error'}</h4>
-                <p className="text-[11px] text-gray-600 leading-tight">{mensaje.texto}</p>
+                <h4 className="font-bold text-[9px]">{mensaje.tipo === 'success' ? '¡Éxito!' : 'Error'}</h4>
+                <p className="text-[9px] text-gray-600 leading-tight">{mensaje.texto}</p>
               </div>
             </div>
-            <button onClick={() => setShowToast(false)} className="text-gray-400 hover:text-gray-600"><X size={14}/></button>
+            <button onClick={() => setShowToast(false)} className="text-gray-400 hover:text-gray-600"><X size={11}/></button>
         </div>
       )}
 
-      {/* TÍTULO Y FILTROS */}
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 border-t-4 border-orange-500 space-y-3">
-        <h2 className="text-lg font-bold text-blue-900 flex items-center gap-2">
-            <History size={20} className="text-orange-500"/> Panel de Solicitudes
-        </h2>
-        <div className="flex gap-2 flex-wrap">
-          {(['Todos', 'Pendiente', 'Aprobado', 'Rechazado'] as const).map(f => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-colors shadow-sm ${
-                filter === f
-                  ? 'bg-blue-900 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              {f} ({solicitudes.filter(s => s.estado === f).length})
-            </button>
-          ))}
+      {/* HEADER */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 bg-white p-2.5 rounded-md shadow-sm border border-gray-100 border-t-4 border-orange-500">
+        <div className="w-full sm:w-auto">
+          <h2 className="text-sm font-bold text-blue-900 flex items-center gap-1.5">
+            <History className="text-orange-500" size={16}/> Panel de Visitantes
+          </h2>
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {(['Todos', 'Pendiente', 'Aprobado', 'Rechazado'] as const).map(f => (
+              <button key={f} onClick={() => setFilter(f)} className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase transition-all ${filter === f ? 'bg-blue-900 text-white shadow-sm' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                {f} ({solicitudes.filter(s => f === 'Todos' ? true : s.estado === f).length})
+              </button>
+            ))}
+          </div>
+        </div>
+        <button onClick={() => setShowDeleteModal(true)} className="px-2 py-1 bg-red-50 text-red-600 font-bold text-[9px] rounded hover:bg-red-600 hover:text-white transition-all border border-red-100 flex items-center gap-1 whitespace-nowrap">
+          <Trash2 size={11} /> Eliminar Historial
+        </button>
+      </div>
+
+      {/* TABLA */}
+      <div className="bg-white rounded-md shadow-sm border border-gray-100 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-[9px]">
+            <thead className="bg-gradient-to-r from-blue-900 to-blue-800 text-white uppercase font-bold border-b border-blue-900">
+              <tr>
+                <th className="px-2.5 py-1.5">Visitante</th>
+                <th className="px-2.5 py-1.5">Cédula</th>
+                <th className="px-2.5 py-1.5">Estado Real</th>
+                <th className="px-2.5 py-1.5 text-center">Historial</th>
+                <th className="px-2.5 py-1.5 text-right">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {solicitudesFiltradas.map((s) => {
+                const ahora = new Date();
+                const expiracion = s.fecha_expiracion ? new Date(s.fecha_expiracion) : null;
+                const esAprobadoActivo = s.estado === 'Aprobado' && expiracion && expiracion > ahora;
+                const esFinalizado = s.estado === 'Aprobado' && expiracion && expiracion <= ahora;
+
+                return (
+                  <tr key={s.id} className="even:bg-slate-50 odd:bg-white hover:bg-orange-50/50 transition-colors">
+                    <td className="px-2.5 py-1.5 flex flex-col">
+                      <span className="font-bold text-blue-900 text-[9px] uppercase">{s.primer_nombre} {s.primer_apellido}</span>
+                      <span className="text-[8px] text-gray-500 font-medium lowercase">{s.correo}</span>
+                    </td>
+                    <td className="px-2.5 py-1.5 font-mono text-gray-600 font-semibold text-[9px]">{s.cedula}</td>
+                    <td className="px-2.5 py-1.5">
+                      {esAprobadoActivo ? (
+                          <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded text-[7px] font-bold border border-green-200 whitespace-nowrap">VIGENTE (24H)</span>
+                      ) : esFinalizado ? (
+                          <span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded text-[7px] font-bold border border-gray-200 whitespace-nowrap">EXPIRADO</span>
+                      ) : (
+                          <span className={`px-1.5 py-0.5 rounded text-[7px] font-bold border whitespace-nowrap ${s.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-red-100 text-red-700 border-red-200'}`}>{s.estado.toUpperCase()}</span>
+                      )}
+                    </td>
+                    <td className="px-2.5 py-1.5 text-center">
+                        <div className="flex justify-center gap-0.5">
+                            {(Number(s.total_aprobados) || 0) > 0 && <span className="bg-green-50 text-green-600 px-1 py-0.5 rounded border border-green-100 text-[7px] font-bold">✓ {s.total_aprobados}</span>}
+                            {(Number(s.total_rechazados) || 0) > 0 && <span className="bg-red-50 text-red-600 px-1 py-0.5 rounded border border-red-100 text-[7px] font-bold">✗ {s.total_rechazados}</span>}
+                        </div>
+                    </td>
+                    
+                    <td className="px-2.5 py-1.5 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        {/* BOTÓN ELIMINAR INDIVIDUAL - Abre el modal */}
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); confirmarEliminarUno(s.id); }} 
+                            className="p-1 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white rounded transition-colors border border-red-100 shadow-sm"
+                            title="Eliminar este registro"
+                        >
+                           <Trash2 size={11} />
+                        </button>
+                        
+                        <button onClick={() => setSelectedSolicitud(s)} className="p-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded transition-colors border border-blue-100 shadow-sm flex items-center gap-0.5">
+                          <Eye size={11}/> <span className="text-[8px] font-bold uppercase">Revisar</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      {/* Tabla */}
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
-        <table className="w-full text-xs">
-          {/* Cabecera Azul */}
-          <thead className="bg-gradient-to-r from-blue-900 to-blue-800 text-white uppercase font-bold border-b border-blue-900">
-            <tr>
-              <th className="px-4 py-3 text-left">Nombre</th>
-              <th className="px-4 py-3 text-left">Cédula</th>
-              <th className="px-4 py-3 text-left hidden sm:table-cell">Teléfono</th>
-              <th className="px-4 py-3 text-left">Estado</th>
-              <th className="px-4 py-3 text-left">Acciones</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {solicitudesFiltradas.length === 0 ? (
-                <tr>
-                    <td colSpan={5} className="py-6 text-center text-gray-400">No hay solicitudes en este estado.</td>
-                </tr>
-            ) : (
-                solicitudesFiltradas.map(s => (
-                  <tr key={s.id} className="even:bg-slate-50 odd:bg-white hover:bg-blue-50/50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-gray-800">{s.primer_nombre} {s.primer_apellido}</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono">{s.cedula}</td>
-                    <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{s.telefono}</td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        s.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700' :
-                        s.estado === 'Aprobado' ? 'bg-green-100 text-green-700' :
-                        s.estado === 'Rechazado' ? 'bg-red-100 text-red-700' :
-                        'bg-gray-100 text-gray-700'
-                      }`}>
-                        {s.estado.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {s.estado === 'Pendiente' && (
-                        <button
-                          onClick={() => setSelectedSolicitud(s)}
-                          className="flex items-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-600 px-2 py-1 rounded text-[10px] font-bold transition border border-blue-200"
-                        >
-                          <Eye size={14} /> Revisar
+      {/* --- NUEVO MODAL PARA ELIMINACIÓN INDIVIDUAL --- */}
+      {showSingleDeleteModal && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-2 animate-fade-in">
+             <div className="bg-white rounded-md shadow-2xl max-w-xs w-full overflow-hidden border border-gray-100">
+                {/* CABECERA AZUL (IGUAL QUE EL RESTO) */}
+                <div className="bg-blue-900 px-3 py-2 flex justify-between items-center text-white border-b-4 border-orange-500">
+                    <h3 className="font-bold text-[9px] uppercase tracking-wider flex items-center gap-1"><Trash2 size={13}/> Eliminar Registro</h3>
+                    <button onClick={() => setShowSingleDeleteModal(false)}><X size={15}/></button>
+                </div>
+                
+                <div className="p-4 text-center space-y-3">
+                    <div className="w-12 h-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                        <Trash2 size={24}/>
+                    </div>
+                    <div>
+                        <h4 className="text-[10px] font-bold text-gray-800 uppercase mb-1">¿Estás seguro?</h4>
+                        <p className="text-[8px] text-gray-500 px-2 leading-relaxed">
+                           Esta acción eliminará este registro permanentemente. No se puede deshacer.
+                        </p>
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                        <button onClick={() => setShowSingleDeleteModal(false)} className="flex-1 py-1.5 bg-gray-100 text-gray-600 font-bold text-[8px] rounded uppercase hover:bg-gray-200 transition-colors">Cancelar</button>
+                        <button onClick={procederEliminarUno} disabled={procesando} className="flex-1 py-1.5 bg-blue-900 text-white font-bold text-[8px] rounded uppercase shadow-md hover:bg-blue-800 transition-colors">
+                           {procesando ? '...' : 'Sí, Eliminar'}
                         </button>
-                      )}
-                      {s.estado !== 'Pendiente' && <span className="text-[10px] text-gray-400">Finalizada</span>}
-                    </td>
-                  </tr>
-                ))
-            )}
-          </tbody>
-        </table>
-      </div>
+                    </div>
+                </div>
+             </div>
+        </div>
+      )}
 
-      {/* Modal de Revisión y Acción (CON IMAGENES OPTIMIZADAS) */}
+      {/* MODAL ELIMINACIÓN MASIVA */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-2 animate-fade-in">
+          <div className="bg-white rounded-md shadow-2xl max-w-sm w-full overflow-hidden border border-gray-100">
+            <div className="bg-blue-900 px-3 py-2 flex justify-between items-center text-white border-b-4 border-orange-500">
+              <h3 className="font-bold text-[9px] uppercase tracking-wider flex items-center gap-1"><Trash2 size={13}/> Limpieza Masiva</h3>
+              <button onClick={() => setShowDeleteModal(false)}><X size={15}/></button>
+            </div>
+            <div className="p-3">
+                {!showConfirmDelete ? (
+                    <div className="space-y-1.5">
+                        <p className="text-[8px] font-bold text-gray-400 uppercase text-center mb-1.5">Selecciona qué registros borrar:</p>
+                        <button onClick={() => { setDeleteType('Aprobado'); setShowConfirmDelete(true); }} className="w-full flex items-center justify-between p-2 rounded bg-gray-50 border border-gray-100 hover:border-green-400 group transition-all text-[9px] font-bold text-gray-700 uppercase">Limpiar Aprobados <CheckCircle2 size={13} className="text-gray-300"/></button>
+                        <button onClick={() => { setDeleteType('Rechazado'); setShowConfirmDelete(true); }} className="w-full flex items-center justify-between p-2 rounded bg-gray-50 border border-gray-100 hover:border-red-400 group transition-all text-[9px] font-bold text-gray-700 uppercase">Limpiar Rechazados <XCircle size={13} className="text-gray-300"/></button>
+                        <button onClick={() => { setDeleteType('Expirado'); setShowConfirmDelete(true); }} className="w-full flex items-center justify-between p-2 rounded bg-gray-50 border border-gray-100 hover:border-orange-400 group transition-all text-[9px] font-bold text-gray-700 uppercase">Limpiar Expirados <Clock size={13} className="text-gray-300"/></button>
+                        <button onClick={() => { setDeleteType('Todo'); setShowConfirmDelete(true); }} className="w-full mt-2 p-1.5 bg-red-600 text-white font-bold text-[8px] uppercase rounded hover:bg-red-700 shadow-md">Borrar Todo</button>
+                    </div>
+                ) : (
+                    <div className="text-center space-y-2.5">
+                        <div className="w-11 h-11 bg-orange-50 text-orange-500 rounded-full flex items-center justify-center mx-auto"><AlertCircle size={24}/></div>
+                        <h4 className="text-[10px] font-bold text-gray-800 uppercase">¿Confirmar?</h4>
+                        <p className="text-[8px] text-gray-500 px-2">Se eliminarán permanentemente los registros de tipo {deleteType}.</p>
+                        <div className="flex gap-1.5 pt-1">
+                            <button onClick={() => setShowConfirmDelete(false)} className="flex-1 py-1.5 bg-gray-100 text-gray-700 font-bold text-[8px] rounded uppercase">No</button>
+                            <button onClick={ejecutarEliminacionMasiva} className="flex-1 py-1.5 bg-blue-900 text-white font-bold text-[8px] rounded uppercase shadow-md">Sí, eliminar</button>
+                        </div>
+                    </div>
+                )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DETALLES */}
       {selectedSolicitud && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto transform transition-all">
-            
-            {/* Header Modal */}
-            <div className="bg-gradient-to-r from-blue-900 to-blue-800 text-white p-4 flex justify-between items-center sticky top-0 border-b-4 border-orange-500">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-2 animate-fade-in">
+          <div className="bg-white rounded-md shadow-2xl w-full max-w-3xl overflow-hidden transform transition-all border border-gray-100 max-h-[92vh] flex flex-col">
+            <div className="bg-blue-900 px-3 py-2 flex justify-between items-center text-white border-b-4 border-orange-500">
+              <div className="flex items-center gap-1.5">
+                <div className="bg-white/10 p-1 rounded"><Eye size={14} className="text-orange-400"/></div>
                 <div>
-                    <h3 className="font-bold text-sm flex items-center gap-2">
-                        <Eye size={16} className="text-orange-400"/> Revisar Solicitud
-                    </h3>
-                    <p className="text-[10px] text-blue-200 mt-0.5">{selectedSolicitud.primer_nombre} {selectedSolicitud.primer_apellido}</p>
+                  <h3 className="font-bold text-[10px] uppercase tracking-widest">Revisión de Perfil</h3>
+                  <p className="text-[7px] text-blue-200 font-mono tracking-widest uppercase">{selectedSolicitud.cedula}</p>
                 </div>
-                <button
-                    onClick={() => { setSelectedSolicitud(null); setRazon(''); }}
-                    className="bg-white/20 hover:bg-white/30 p-1.5 rounded-lg transition-colors"
-                >
-                    <X size={16} />
-                </button>
+              </div>
+              <button onClick={() => setSelectedSolicitud(null)} className="hover:bg-white/20 p-0.5 rounded-full transition-colors"><X size={16}/></button>
             </div>
-
-            {/* CONTENIDO EN DOBLE COLUMNA */}
-            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* COLUMNA 1: DATOS Y MOTIVO */}
-              <div className="space-y-4">
-                
-                <h4 className="font-bold text-gray-800 text-xs uppercase border-b pb-2 mb-2">Datos del Solicitante</h4>
-                <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-lg text-xs border border-gray-200">
-                    <div><p className="text-gray-500 font-bold uppercase text-[10px]">Cédula</p><p className="font-mono text-gray-800">{selectedSolicitud.cedula}</p></div>
-                    <div><p className="text-gray-500 font-bold uppercase text-[10px]">Teléfono</p><p className="font-semibold text-gray-800">{selectedSolicitud.telefono}</p></div>
-                    <div className="col-span-2"><p className="text-gray-500 font-bold uppercase text-[10px]">Correo</p><p className="font-semibold text-blue-800">{selectedSolicitud.correo}</p></div>
-                </div>
-
-                {/* Descripción */}
-                <div>
-                    <p className="font-bold text-gray-700 text-xs uppercase mb-1">Motivo de la visita:</p>
-                    <p className="bg-blue-50 p-3 rounded-lg text-xs border border-blue-200 whitespace-pre-wrap">{selectedSolicitud.descripcion}</p>
-                </div>
-                
-                {/* Acciones */}
-                {selectedSolicitud.estado === 'Pendiente' && (
-                    <div className="space-y-3 pt-3 border-t border-gray-100">
-                        <textarea
-                            placeholder="Escribe la razón detallada para RECHAZAR la solicitud (Obligatorio si rechazas)"
-                            value={razon}
-                            onChange={(e) => setRazon(e.target.value)}
-                            className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500 resize-none"
-                            rows={2}
-                        />
-
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => aprobar(selectedSolicitud.id)}
-                                disabled={procesando}
-                                className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white py-2 rounded-lg font-bold hover:shadow-md transition disabled:bg-gray-400 flex items-center justify-center gap-2 text-sm shadow-green-200/50"
-                            >
-                                <CheckCircle2 size={16} /> Aprobar
-                            </button>
-                            <button
-                                onClick={() => rechazar(selectedSolicitud.id)}
-                                disabled={procesando || !razon.trim()}
-                                className="flex-1 bg-red-600 text-white py-2 rounded-lg font-bold hover:bg-red-700 transition disabled:bg-gray-400 flex items-center justify-center gap-2 text-sm shadow-red-200/50"
-                            >
-                                <XCircle size={16} /> Rechazar
-                            </button>
+            
+            <div className="p-3 grid grid-cols-1 md:grid-cols-2 gap-3 overflow-y-auto flex-1">
+              <div className="space-y-2.5">
+                <section>
+                    <h4 className="text-[7px] font-bold text-blue-900 uppercase mb-1 tracking-wider flex items-center gap-0.5"><div className="w-1 h-1 bg-orange-500 rounded-full"/> Datos Personales</h4>
+                    <div className="bg-slate-50 p-2 rounded space-y-1 border border-slate-100 text-[8px]">
+                        <div className="flex justify-between border-b border-slate-200 pb-0.5"><span className="font-bold text-gray-400">Nombre</span><span className="font-bold text-blue-900 uppercase">{selectedSolicitud.primer_nombre} {selectedSolicitud.primer_apellido}</span></div>
+                        <div className="flex justify-between border-b border-slate-200 pb-0.5"><span className="font-bold text-gray-400">Contacto</span><span className="font-bold">{selectedSolicitud.telefono}</span></div>
+                        <div className="flex justify-between pt-0.5"><span className="font-bold text-gray-400">Historial</span>
+                          <div className="flex gap-1">
+                             {(Number(selectedSolicitud.total_aprobados) || 0) > 0 && <span className="text-[7px] font-black text-green-600 uppercase">✓ OK: {selectedSolicitud.total_aprobados}</span>}
+                             {(Number(selectedSolicitud.total_rechazados) || 0) > 0 && <span className="text-[7px] font-black text-red-600 uppercase">✗ NO: {selectedSolicitud.total_rechazados}</span>}
+                          </div>
                         </div>
                     </div>
-                )}
+                </section>
+                <section>
+                    <h4 className="text-[7px] font-bold text-blue-900 uppercase mb-1 tracking-wider flex items-center gap-0.5"><div className="w-1 h-1 bg-orange-500 rounded-full"/> Motivo</h4>
+                    <div className="bg-blue-50/50 p-2 rounded border border-blue-100 text-[8px] font-medium text-slate-600 italic">"{selectedSolicitud.descripcion}"</div>
+                </section>
+
+                <div className="pt-0.5">
+                  {selectedSolicitud.estado === 'Pendiente' ? (
+                    <div className="space-y-1.5">
+                        <textarea value={razon} onChange={e => setRazon(e.target.value)} placeholder="Motivo u observaciones del rechazo..." className="w-full p-2 text-[8px] font-medium border border-gray-200 rounded h-14 outline-none focus:ring-1 focus:ring-blue-500 transition-all resize-none shadow-inner"/>
+                        <div className="flex gap-1.5">
+                            <button onClick={() => aprobar(selectedSolicitud.id)} disabled={procesando} className="flex-1 bg-green-600 text-white py-1.5 rounded font-bold text-[9px] uppercase tracking-widest hover:bg-green-700 shadow-md">Aprobar</button>
+                            <button onClick={() => rechazar(selectedSolicitud.id)} disabled={procesando || !razon.trim()} className="flex-1 bg-red-600 text-white py-1.5 rounded font-bold text-[9px] uppercase tracking-widest hover:bg-red-700 shadow-md">Rechazar</button>
+                        </div>
+                    </div>
+                  ) : (
+                    <div className="bg-orange-50 p-2 rounded border border-orange-100 text-center">
+                        <p className="text-orange-800 text-[8px] font-bold uppercase mb-1">Procesado como {selectedSolicitud.estado}</p>
+                        <button onClick={() => corregirDecision(selectedSolicitud.id)} className="w-full bg-white text-orange-600 border border-orange-200 py-1 rounded font-bold text-[8px] uppercase tracking-widest hover:bg-orange-600 hover:text-white transition-all shadow-sm flex items-center justify-center gap-1"><RotateCcw size={10}/> Cambiar decisión</button>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* COLUMNA 2: EVIDENCIAS (FOTO Y DOCUMENTO) - 🔥 OPTIMIZADAS */}
-              <div className="space-y-4">
-                <h4 className="font-bold text-gray-800 text-xs uppercase border-b pb-2 mb-2">Evidencias Adjuntas</h4>
-                
-                {/* Foto Biometrica - 🔥 CON LAZY LOADING */}
-                {selectedSolicitud.foto_base64 ? (
-                    <div className="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
-                        <p className="font-bold text-gray-700 text-xs uppercase mb-2 flex items-center gap-1"><Camera size={14}/> Foto Biométrica</p>
-                        <ImagenLazy 
-                          src={selectedSolicitud.foto_base64} 
-                          alt="Foto Biométrica" 
-                          className="w-full max-h-48 object-contain rounded-lg border border-gray-300 bg-black/50" 
-                        />
-                    </div>
-                ) : (
-                    <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-500">
-                        <Camera size={14} className="inline mr-1"/> Sin foto biométrica capturada.
-                    </div>
-                )}
-
-                {/* Documento Adjunto - 🔥 SOLO SE RENDERIZA CUANDO SE ABRE EL MODAL */}
-                {selectedSolicitud.documento_base64 && selectedSolicitud.nombre_documento ? (
-                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg shadow-sm">
-                        <p className="font-bold text-blue-900 text-xs uppercase mb-2 flex items-center gap-1"><Upload size={14}/> Documento Adjunto</p>
-                        <div className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-100">
-                            <div className="flex items-center gap-2 overflow-hidden">
-                                <FileText size={20} className="text-blue-600 flex-shrink-0"/>
-                                <span className="text-sm font-medium text-gray-700 truncate">{selectedSolicitud.nombre_documento}</span>
+              <div className="space-y-2.5">
+                <section>
+                    <h4 className="text-[7px] font-bold text-blue-900 uppercase mb-1 tracking-wider flex items-center gap-0.5"><div className="w-1 h-1 bg-orange-500 rounded-full"/> Biometría Facial</h4>
+                    {selectedSolicitud.foto_base64 ? (
+                        <div className="relative rounded overflow-hidden border-2 border-slate-100 shadow-lg bg-black aspect-video flex items-center justify-center">
+                            <ImagenLazy src={selectedSolicitud.foto_base64} alt="Biometría" className="w-full h-full object-contain"/>
+                        </div>
+                    ) : <div className="h-24 bg-slate-50 rounded border border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-300 gap-0.5 font-bold uppercase text-[7px] tracking-widest"><Camera size={18}/>Sin foto</div>}
+                </section>
+                <section>
+                    <h4 className="text-[7px] font-bold text-blue-900 uppercase mb-1 tracking-wider flex items-center gap-0.5"><div className="w-1 h-1 bg-orange-500 rounded-full"/> Documentación</h4>
+                    {selectedSolicitud.documento_base64 ? (
+                        <div className="bg-blue-900 p-0.5 rounded shadow-md">
+                            <div className="bg-white p-2 rounded-sm flex justify-between items-center">
+                                <div className="flex items-center gap-1 overflow-hidden">
+                                    <div className="bg-blue-50 p-0.5 rounded text-blue-900"><FileText size={14}/></div>
+                                    <span className="truncate text-[8px] font-bold text-blue-900 uppercase">{selectedSolicitud.nombre_documento}</span>
+                                </div>
+                                <a href={selectedSolicitud.documento_base64} download={selectedSolicitud.nombre_documento} className="bg-orange-500 text-white p-1 rounded hover:bg-orange-600 transition-all shadow-sm active:scale-90"><Download size={12}/></a>
                             </div>
-                            <a
-                                href={selectedSolicitud.documento_base64}
-                                download={selectedSolicitud.nombre_documento}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="bg-orange-500 text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold hover:bg-orange-600 transition flex items-center gap-1"
-                            >
-                                <Download size={12}/> Ver/Descargar
-                            </a>
                         </div>
-                    </div>
-                ) : (
-                    <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-500">
-                        <FileText size={14} className="inline mr-1"/> No se adjuntó documento de respaldo.
-                    </div>
-                )}
+                    ) : <div className="p-2.5 bg-slate-50 rounded border border-dashed border-slate-200 text-center text-slate-300 font-bold uppercase text-[7px] tracking-widest">Sin archivo</div>}
+                </section>
               </div>
-              
             </div>
-            
-            {/* Pie de modal */}
-            <button
-                onClick={() => { setSelectedSolicitud(null); setRazon(''); }}
-                className="w-full mt-4 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition text-sm"
-            >
-                Cerrar Revisión
-            </button>
+            <div className="bg-gray-50 p-2 flex justify-center border-t border-gray-100 shadow-inner">
+              <button onClick={() => setSelectedSolicitud(null)} className="text-[8px] font-bold text-gray-400 uppercase tracking-[0.3em] hover:text-blue-900 transition-colors">Volver al Panel</button>
+            </div>
           </div>
         </div>
       )}

@@ -95,7 +95,7 @@ export const registrarAcceso = async (req: Request, res: Response) => {
   try {
     const { usuario_id, tipo_usuario, metodo, foto_verificacion_base64, confianza_facial } = req.body; 
     
-    // Validar si el rostro está habilitado
+    // Validar si el rostro está habilitado (Solo para usuarios regulares)
     if (metodo === 'Reconocimiento Facial' && tipo_usuario !== 'Visitante') {
        const check = await db.execute("SELECT rostro_habilitado FROM personas WHERE id = ?", [usuario_id]);
        if (check.rows.length > 0 && !check.rows[0].rostro_habilitado) {
@@ -107,18 +107,23 @@ export const registrarAcceso = async (req: Request, res: Response) => {
     let visitanteId: number | null = null;
     let nombreUsuario = "Usuario";
 
-    if (tipo_usuario === 'Estudiante' || tipo_usuario === 'Docente' || tipo_usuario === 'Administrativo' || tipo_usuario === 'Admin') {
-      personaId = Number(usuario_id);
-      const pCheck = await db.execute("SELECT primer_nombre FROM personas WHERE id = ?", [personaId]);
-      if (pCheck.rows.length > 0) nombreUsuario = (pCheck.rows[0] as any).primer_nombre;
-    } else if (tipo_usuario === 'General') {
-      // 🔥 Los visitantes aprobados son de tipo 'General' en la tabla personas
-      personaId = Number(usuario_id);
-      const pCheck = await db.execute("SELECT primer_nombre FROM personas WHERE id = ? AND tipo_persona = 'General'", [personaId]);
-      if (pCheck.rows.length > 0) nombreUsuario = (pCheck.rows[0] as any).primer_nombre;
+    // 🔥 CORRECCIÓN AQUÍ: Separar lógica de Visitante vs Usuario
+    if (tipo_usuario === 'Visitante') {
+        // ES UN VISITANTE
+        visitanteId = Number(usuario_id);
+        const vCheck = await db.execute("SELECT primer_nombre FROM solicitudes_visitantes WHERE id = ?", [visitanteId]);
+        if (vCheck.rows.length > 0) nombreUsuario = (vCheck.rows[0] as any).primer_nombre;
+    
+    } else {
+        // ES UN USUARIO REGULAR (Estudiante, Admin, etc.)
+        personaId = Number(usuario_id);
+        const pCheck = await db.execute("SELECT primer_nombre FROM personas WHERE id = ?", [personaId]);
+        if (pCheck.rows.length > 0) nombreUsuario = (pCheck.rows[0] as any).primer_nombre;
     }
 
     const fechaRegistro = getFechaEcuador();
+    
+    // Insertamos respetando las columnas correctas (visitante_id o persona_id)
     await db.execute({
       sql: `INSERT INTO accesos (persona_id, visitante_id, metodo, fecha, foto_verificacion_base64, confianza_facial) VALUES (?, ?, ?, ?, ?, ?)`,
       args: [personaId, visitanteId, metodo, fechaRegistro, foto_verificacion_base64 || null, confianza_facial || null]
@@ -172,28 +177,7 @@ export const borrarHistorial = async (req: Request, res: Response) => {
 // ============================================
 export const obtenerUltimosAccesos = async (req: Request, res: Response) => {
   try {
-    const result = await db.execute(`
-      SELECT a.id, a.metodo, a.fecha, a.confianza_facial, a.foto_verificacion_base64,
-      COALESCE(p.primer_nombre, v.primer_nombre) as primer_nombre,
-      COALESCE(p.primer_apellido, v.primer_apellido) as primer_apellido,
-      COALESCE(p.cedula, v.cedula) as cedula,
-      COALESCE(p.foto_url, v.foto_base64) as foto_url, 
-      CASE WHEN p.id IS NOT NULL THEN p.tipo_persona ELSE 'General' END as tipo_persona
-      FROM accesos a
-      LEFT JOIN personas p ON a.persona_id = p.id
-      LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
-      ORDER BY a.fecha DESC LIMIT 10
-    `);
-    res.json({ success: true, accesos: result.rows });
-  } catch (e) { res.status(500).json({ error: "Error historial" }); }
-};
-
-// ============================================
-// 🔥 OBTENER HISTORIAL COMPLETO (PÁGINA HISTORIAL) - CORREGIDO
-// ============================================
-export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
-  try {
-    // 🔥 QUERY MEJORADA: Maneja mejor los visitantes (tipo_persona = 'General')
+    // 🔥 CORRECCIÓN: Usamos COALESCE para traer datos de la tabla correcta
     const result = await db.execute(`
       SELECT 
         a.id, 
@@ -201,31 +185,51 @@ export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
         a.fecha, 
         a.confianza_facial, 
         a.foto_verificacion_base64,
-        -- Si hay persona_id, obtén datos de personas; si hay visitante_id, obtén de solicitudes_visitantes
+        
+        COALESCE(p.primer_nombre, v.primer_nombre, 'Desconocido') as primer_nombre,
+        COALESCE(p.primer_apellido, v.primer_apellido, '') as primer_apellido,
+        COALESCE(p.cedula, v.cedula, '---') as cedula,
+        COALESCE(p.foto_url, v.foto_base64) as foto_url, 
+        
         CASE 
-          WHEN a.persona_id IS NOT NULL THEN p.primer_nombre 
-          ELSE v.primer_nombre 
-        END as primer_nombre,
-        CASE 
-          WHEN a.persona_id IS NOT NULL THEN p.primer_apellido 
-          ELSE v.primer_apellido 
-        END as primer_apellido,
-        CASE 
-          WHEN a.persona_id IS NOT NULL THEN p.cedula 
-          ELSE v.cedula 
-        END as cedula,
-        CASE 
-          WHEN a.persona_id IS NOT NULL THEN p.correo 
-          ELSE v.correo 
-        END as correo,
-        CASE 
-          WHEN a.persona_id IS NOT NULL THEN p.foto_url 
-          ELSE v.foto_base64 
-        END as foto_url,
-        CASE 
-          WHEN a.persona_id IS NOT NULL THEN p.tipo_persona 
-          ELSE 'General'  -- Visitantes se muestran como 'General' (Visitante)
+           WHEN a.visitante_id IS NOT NULL THEN 'Visitante'
+           ELSE p.tipo_persona 
         END as tipo_persona
+
+      FROM accesos a
+      LEFT JOIN personas p ON a.persona_id = p.id
+      LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
+      ORDER BY a.fecha DESC LIMIT 20
+    `);
+    res.json({ success: true, accesos: result.rows });
+  } catch (e) { res.status(500).json({ error: "Error historial" }); }
+};
+
+// ============================================
+// 🔥 OBTENER HISTORIAL COMPLETO (PÁGINA HISTORIAL)
+// ============================================
+export const obtenerHistorialCompleto = async (req: Request, res: Response) => {
+  try {
+    const result = await db.execute(`
+      SELECT 
+        a.id, 
+        a.metodo, 
+        a.fecha, 
+        a.confianza_facial, 
+        a.foto_verificacion_base64,
+        
+        -- DATOS DEL USUARIO O VISITANTE
+        COALESCE(p.primer_nombre, v.primer_nombre, 'Desconocido') as primer_nombre,
+        COALESCE(p.primer_apellido, v.primer_apellido, '') as primer_apellido,
+        COALESCE(p.cedula, v.cedula, '---') as cedula,
+        COALESCE(p.correo, v.correo, '') as correo,
+        COALESCE(p.foto_url, v.foto_base64) as foto_url,
+        
+        CASE 
+          WHEN a.visitante_id IS NOT NULL THEN 'Visitante'
+          ELSE p.tipo_persona 
+        END as tipo_persona
+
       FROM accesos a
       LEFT JOIN personas p ON a.persona_id = p.id
       LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
@@ -292,79 +296,150 @@ export const obtenerEstadisticas = async (req: Request, res: Response) => {
   } catch (error: any) { res.status(500).json({ success: false, error: 'Error estadisticas' }); }
 };
 
-// ============================================
-// 🔥 GRÁFICOS (PARA EL DASHBOARD)
-// ============================================
 export const obtenerGraficos = async (req: Request, res: Response) => {
   try {
     const { fechaInicio, fechaFin, horaInicio, horaFin, tipoPersona } = req.query;
-    const fechaEc = getFechaEcuador();
-    const hoySQL = fechaEc.split(' ')[0];
-    let whereAccesos = "WHERE 1=1"; 
     
-    if (fechaInicio) whereAccesos += ` AND date(a.fecha) >= date('${fechaInicio}')`;
-    if (fechaFin) whereAccesos += ` AND date(a.fecha) <= date('${fechaFin}')`;
-    if (horaInicio) whereAccesos += ` AND strftime('%H:%M', a.fecha) >= '${horaInicio}'`;
-    if (horaFin) whereAccesos += ` AND strftime('%H:%M', a.fecha) <= '${horaFin}'`;
+    const fechaEc = getFechaEcuador();
+    const hoySQL = fechaEc.split(' ')[0]; // YYYY-MM-DD
+    
+    // 1. CONSTRUCCIÓN DEL FILTRO (WHERE)
+    let whereBase = "WHERE 1=1"; 
+    
+    // Fechas por defecto si no envían nada
+    const startString = (fechaInicio as string) || hoySQL;
+    const endString = (fechaFin as string) || hoySQL;
+
+    if (fechaInicio) whereBase += ` AND date(a.fecha) >= date('${fechaInicio}')`;
+    if (fechaFin) whereBase += ` AND date(a.fecha) <= date('${fechaFin}')`;
+    
+    if (horaInicio) whereBase += ` AND strftime('%H:%M', a.fecha) >= '${horaInicio}'`;
+    if (horaFin) whereBase += ` AND strftime('%H:%M', a.fecha) <= '${horaFin}'`;
 
     if (tipoPersona) {
-      if (tipoPersona === 'General') whereAccesos += ` AND p.tipo_persona = 'General'`;
-      else whereAccesos += ` AND p.tipo_persona = '${tipoPersona}'`;
+      if (tipoPersona === 'Visitante' || tipoPersona === 'General') {
+          whereBase += ` AND a.visitante_id IS NOT NULL`;
+      } else {
+          whereBase += ` AND p.tipo_persona = '${tipoPersona}'`;
+      }
     }
 
-    const total = await db.execute(`SELECT COUNT(*) as c FROM personas WHERE tipo_persona != 'Admin'`);
-    const accesosHoy = await db.execute({ sql: `SELECT COUNT(*) as c FROM accesos a WHERE date(a.fecha) = ?`, args: [hoySQL] });
+    // 2. CONTEOS Y KPIs (Queries)
+    const totalRes = await db.execute({
+        sql: `SELECT COUNT(*) as c FROM accesos a LEFT JOIN personas p ON a.persona_id = p.id LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id ${whereBase}`,
+        args: []
+    });
+    const totalAccesosFiltrados = Number(totalRes.rows[0]?.c) || 0;
 
-    const getCountByRole = async (rol: string) => {
-      const res = await db.execute(`SELECT COUNT(*) as c FROM personas WHERE tipo_persona = '${rol}' AND estado = 'Activo'`);
-      return ((res.rows[0] as any) || {}).c || 0;
-    };
-
-    const [countEst, countDoc, countAdm, countGen] = await Promise.all([
-        getCountByRole('Estudiante'), getCountByRole('Docente'), getCountByRole('Administrativo'), getCountByRole('General')
-    ]);
+    const rolesRes = await db.execute({
+        sql: `SELECT 
+                SUM(CASE WHEN p.tipo_persona = 'Estudiante' THEN 1 ELSE 0 END) as est,
+                SUM(CASE WHEN p.tipo_persona = 'Docente' THEN 1 ELSE 0 END) as doc,
+                SUM(CASE WHEN p.tipo_persona = 'Administrativo' THEN 1 ELSE 0 END) as adm,
+                SUM(CASE WHEN a.visitante_id IS NOT NULL THEN 1 ELSE 0 END) as vis
+              FROM accesos a 
+              LEFT JOIN personas p ON a.persona_id = p.id 
+              LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
+              ${whereBase}`,
+        args: []
+    });
+    const counts = rolesRes.rows[0] as any;
 
     const ultimos = await db.execute(`
       SELECT 
-        CASE WHEN a.persona_id IS NOT NULL THEN p.primer_nombre ELSE v.primer_nombre END as primer_nombre, 
-        CASE WHEN a.persona_id IS NOT NULL THEN p.primer_apellido ELSE v.primer_apellido END as primer_apellido,
-        CASE WHEN a.persona_id IS NOT NULL THEN p.cedula ELSE v.cedula END as cedula,
-        CASE WHEN a.persona_id IS NOT NULL THEN p.tipo_persona ELSE 'General' END as tipo_persona,
-        CASE WHEN a.persona_id IS NOT NULL THEN p.foto_url ELSE v.foto_base64 END as foto_url, 
+        COALESCE(p.primer_nombre, v.primer_nombre, 'Desconocido') as primer_nombre, 
+        COALESCE(p.primer_apellido, v.primer_apellido, '') as primer_apellido,
+        CASE WHEN a.visitante_id IS NOT NULL THEN 'Visitante' ELSE p.tipo_persona END as tipo_persona,
         a.metodo, a.fecha 
       FROM accesos a 
       LEFT JOIN personas p ON a.persona_id = p.id 
       LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
-      ${whereAccesos} 
-      ORDER BY a.fecha DESC 
-      LIMIT 10
+      ${whereBase} 
+      ORDER BY a.fecha DESC LIMIT 10
     `);
 
-    const rawGraficaSemanal = await db.execute(`
-      SELECT strftime('%Y-%m-%d', a.fecha) as dia, COUNT(*) as cantidad FROM accesos a
-      LEFT JOIN personas p ON a.persona_id = p.id 
-      LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
-      ${whereAccesos} AND a.fecha >= date('${hoySQL}', '-6 days') 
-      GROUP BY dia
-    `);
+    // =========================================================================
+    // 🔥 3. CORRECCIÓN DE FECHAS (ZONA HORARIA) PARA LA GRÁFICA
+    // =========================================================================
+    
+    // Función para crear fecha al MEDIODÍA (12:00) y evitar saltos de día por Timezone
+    const crearFechaSegura = (fechaStr: string) => {
+        const [anio, mes, dia] = fechaStr.split('-').map(Number);
+        return new Date(anio, mes - 1, dia, 12, 0, 0); 
+    };
 
-    const diasSemana = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-    const graficaSemanalFinal = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(new Date().setDate(new Date().getDate() - i));
-      const fechaStr = d.toISOString().split('T')[0];
-      const dato = (rawGraficaSemanal.rows as any[]).find((r: any) => r.dia === fechaStr);
-      graficaSemanalFinal.push({ name: diasSemana[d.getDay()], fecha: fechaStr, accesos: dato ? Number(dato.cantidad) : 0 });
+    const dInicio = crearFechaSegura(startString);
+    const dFin = crearFechaSegura(endString);
+    
+    // Si no hay filtro, mostrar últimos 7 días
+    if (!fechaInicio) dInicio.setDate(dFin.getDate() - 6);
+
+    const diffTime = Math.abs(dFin.getTime() - dInicio.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+    let sqlFormat = '';
+    let stepType: 'day' | 'month' | 'year' = 'day';
+
+    if (diffDays <= 60) {
+        sqlFormat = '%Y-%m-%d'; 
+        stepType = 'day';
+    } else if (diffDays <= 730) {
+        sqlFormat = '%Y-%m'; 
+        stepType = 'month';
+    } else {
+        sqlFormat = '%Y'; 
+        stepType = 'year';
     }
 
-    const fechaParaHoras = (fechaInicio as string) || hoySQL;
+    const rawGrafica = await db.execute(`
+      SELECT strftime('${sqlFormat}', a.fecha) as periodo, COUNT(*) as cantidad 
+      FROM accesos a
+      LEFT JOIN personas p ON a.persona_id = p.id 
+      LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
+      ${whereBase} 
+      GROUP BY periodo ORDER BY periodo ASC
+    `);
+
+    // 🧠 Rellenar huecos con 0 (Usando fechas seguras)
+    const graficaFinal = [];
+    let current = new Date(dInicio); // Empieza en la fecha exacta a las 12:00 PM
+
+    // Bucle seguro comparando timestamps para incluir el último día
+    while (current.getTime() <= dFin.getTime()) { 
+        let labelDB = "";
+        let labelVisual = "";
+        
+        const y = current.getFullYear();
+        const m = String(current.getMonth() + 1).padStart(2, '0');
+        const d = String(current.getDate()).padStart(2, '0');
+
+        if (stepType === 'day') {
+            labelDB = `${y}-${m}-${d}`;
+            labelVisual = `${d}/${m}`;
+            current.setDate(current.getDate() + 1); // Avanza 1 día
+        } else if (stepType === 'month') {
+            labelDB = `${y}-${m}`;
+            const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+            labelVisual = `${months[current.getMonth()]} ${y}`;
+            current.setMonth(current.getMonth() + 1); // Avanza 1 mes
+        } else {
+            labelDB = String(y);
+            labelVisual = String(y);
+            current.setFullYear(current.getFullYear() + 1); // Avanza 1 año
+        }
+
+        const dato = (rawGrafica.rows as any[]).find((r: any) => r.periodo === labelDB);
+        graficaFinal.push({ name: labelVisual, accesos: dato ? Number(dato.cantidad) : 0 });
+    }
+
+    // 4. GRÁFICO POR HORA
     const rawGraficaHoras = await db.execute({
-      sql: `SELECT strftime('%H', a.fecha) as hora, COUNT(*) as cantidad FROM accesos a
-        LEFT JOIN personas p ON a.persona_id = p.id 
-        LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
-        WHERE date(a.fecha) = date(?) ${tipoPersona === 'General' ? "AND p.tipo_persona = 'General'" : (tipoPersona ? `AND p.tipo_persona = '${tipoPersona}'` : "")}
-        GROUP BY hora ORDER BY hora ASC`,
-      args: [fechaParaHoras]
+      sql: `SELECT strftime('%H', a.fecha) as hora, COUNT(*) as cantidad 
+            FROM accesos a 
+            LEFT JOIN personas p ON a.persona_id = p.id 
+            LEFT JOIN solicitudes_visitantes v ON a.visitante_id = v.id
+            ${whereBase} GROUP BY hora ORDER BY hora ASC`,
+      args: []
     });
 
     const graficaHorasFinal = Array.from({ length: 24 }, (_, i) => {
@@ -373,10 +448,26 @@ export const obtenerGraficos = async (req: Request, res: Response) => {
       return { hora: `${horaStr}:00`, cantidad: datoEncontrado ? Number(datoEncontrado.cantidad) : 0 };
     });
 
+    const totalPersonasRes = await db.execute(`SELECT COUNT(*) as c FROM personas WHERE tipo_persona != 'Admin'`);
+    const totalVisitantesRes = await db.execute(`SELECT COUNT(*) as c FROM solicitudes_visitantes WHERE estado = 'Aprobado'`);
+    const totalGlobal = (Number(totalPersonasRes.rows[0]?.c) || 0) + (Number(totalVisitantesRes.rows[0]?.c) || 0);
+
     res.json({
-      total: ((total.rows[0] as any) || {}).c || 0, hoy: ((accesosHoy.rows[0] as any) || {}).c || 0,
-      estudiantes: countEst, docentes: countDoc, administrativos: countAdm, general: countGen,
-      recientes: ultimos.rows, grafica: graficaSemanalFinal, graficaPorHora: graficaHorasFinal 
+      total: totalGlobal, 
+      total_accesos: totalAccesosFiltrados, 
+      total_visitantes: Number(counts.vis) || 0,
+      estudiantes: Number(counts.est) || 0,
+      docentes: Number(counts.doc) || 0,
+      administrativos: Number(counts.adm) || 0,
+      general: Number(counts.vis) || 0,
+      recientes: ultimos.rows,
+      grafica: graficaFinal, 
+      graficaPorHora: graficaHorasFinal
     });
-  } catch (error) { res.status(500).json({ error: "Error obteniendo estadísticas" }); }
+
+  } catch (error) { 
+      console.error("Error Dashboard:", error);
+      res.status(500).json({ error: "Error obteniendo estadísticas" }); 
+  }
 };
+

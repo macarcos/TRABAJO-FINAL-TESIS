@@ -4,7 +4,7 @@ import { enviarCredenciales, notificarActualizacion } from '../config/mailer';
 import crypto from 'crypto';
 
 // ============================================
-// 1. LOGIN
+// 1. LOGIN (CÓDIGO EXISTENTE)
 // ============================================
 export const login = async (req: Request, res: Response) => {
   const { usuario, password } = req.body;
@@ -29,7 +29,6 @@ export const login = async (req: Request, res: Response) => {
     }
     
     const u = result.rows[0] as any;
-    console.log("✅ LOGIN EXITOSO:", u.usuario, "ROL:", u.tipo_persona, "needs_password_reset:", u.needs_password_reset);
 
     res.json({
       auth: true,
@@ -49,16 +48,12 @@ export const login = async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error("❌ Error en login:", error);
-    res.status(500).json({ 
-      auth: false,
-      error: "Error en el servidor",
-      detalle: error.message
-    });
+    res.status(500).json({ auth: false, error: "Error en el servidor", detalle: error.message });
   }
 };
 
 // ============================================
-// 2. REGISTRAR
+// 2. REGISTRAR (🔥 VALIDACIÓN ACTUALIZADA)
 // ============================================
 export const registrar = async (req: Request, res: Response) => {
     const { 
@@ -74,8 +69,29 @@ export const registrar = async (req: Request, res: Response) => {
         if (!correo.endsWith('@unemi.edu.ec')) {
             return res.status(400).json({ error: "Correo debe ser @unemi.edu.ec" });
         }
-        if (cedula && !/^\d{10}$/.test(cedula)) return res.status(400).json({ error: "Cédula inválida" });
-        if (telefono && !/^09\d{8}$/.test(telefono)) return res.status(400).json({ error: "Teléfono inválido" });
+
+        // 🔥 VALIDACIÓN DOCUMENTO (CÉDULA O PASAPORTE)
+        if (cedula) {
+            const esEcuatoriano = /^\d{10}$/.test(cedula); 
+            const esPasaporte = /^[a-zA-Z0-9]{5,20}$/.test(cedula); 
+
+            if (!esEcuatoriano && !esPasaporte) {
+                return res.status(400).json({ error: "Documento inválido. Cédula (10 dígitos) o Pasaporte (5-20 caracteres)" });
+            }
+        }
+
+        // 🔥 CORRECCIÓN AQUÍ: VALIDACIÓN DE TELÉFONO FLEXIBLE
+        if (telefono) {
+            // Caso 1: Ecuador (09xxxxxxxx) -> Empieza con 09, tiene 10 dígitos
+            const esCelularEc = /^09\d{8}$/.test(telefono);
+            
+            // Caso 2: Internacional (+Codigo Numero) -> Empieza con +, permite espacio y números
+            const esInternacional = /^\+\d{1,4}\s?\d{6,15}$/.test(telefono);
+
+            if (!esCelularEc && !esInternacional) {
+                return res.status(400).json({ error: "Teléfono inválido. Use formato local (09xxxxxxxx) o internacional (+57...)." });
+            }
+        }
 
         const n1 = primer_nombre.charAt(0).toLowerCase();
         const a1 = primer_apellido.toLowerCase().replace(/\s/g, '');
@@ -99,7 +115,7 @@ export const registrar = async (req: Request, res: Response) => {
 
         if (cedula) {
             const cedulaExiste = await db.execute({ sql: "SELECT id FROM personas WHERE cedula = ?", args: [cedula] });
-            if (cedulaExiste.rows.length > 0) return res.status(400).json({ error: "La cédula ya está registrada" });
+            if (cedulaExiste.rows.length > 0) return res.status(400).json({ error: "El documento ya está registrado" });
         }
         if (rfid_code) {
             const rfidExiste = await db.execute({ sql: "SELECT id FROM personas WHERE rfid_code = ?", args: [rfid_code] });
@@ -295,13 +311,50 @@ export const cambiarPassword = async (req: Request, res: Response) => {
 };
 
 // ============================================
-// 7. OBTENER VECTORES Y RFID
+// 7. OBTENER VECTORES Y RFID (🔥 MODIFICADO: INCLUYE VISITANTES APROBADOS VIGENTES)
 // ============================================
 export const obtenerVectoresFaciales = async (req: Request, res: Response) => {
   try {
-    const result = await db.execute(`SELECT id, primer_nombre, primer_apellido, vector_facial, foto_url, estado, tipo_persona FROM personas WHERE vector_facial IS NOT NULL AND estado = 'Activo'`);
-    res.json({ success: true, personas: result.rows });
-  } catch (error) { res.status(500).json({ error: "Error vectores" }); }
+    // 1. OBTENER PERSONAS (INCLUSO INACTIVAS PARA FILTRAR EN FRONTEND O ACTIVAS)
+    // 🔥 IMPORTANTE: Agregamos 'rostro_habilitado' a la consulta
+    const personas = await db.execute(`
+      SELECT 
+        id, 
+        primer_nombre, 
+        primer_apellido, 
+        vector_facial, 
+        foto_url, 
+        estado, 
+        tipo_persona,
+        rostro_habilitado  -- 👈 ¡ESTE FALTABA!
+      FROM personas 
+      WHERE vector_facial IS NOT NULL OR foto_url IS NOT NULL
+    `);
+
+    // 2. OBTENER VISITANTES APROBADOS
+    const visitantes = await db.execute(`
+      SELECT 
+        id, 
+        primer_nombre, 
+        primer_apellido, 
+        NULL as vector_facial,
+        foto_base64 as foto_url, 
+        'Aprobado' as estado,
+        'Visitante' as tipo_persona,
+        1 as rostro_habilitado -- Visitantes aprobados siempre tienen rostro habilitado
+      FROM solicitudes_visitantes 
+      WHERE estado = 'Aprobado' 
+        AND fecha_expiracion > datetime('now')
+        AND foto_base64 IS NOT NULL
+    `);
+
+    const todosLosUsuarios = [...personas.rows, ...visitantes.rows];
+    
+    res.json({ success: true, personas: todosLosUsuarios });
+  } catch (error) { 
+    console.error("❌ Error obteniendo vectores:", error);
+    res.status(500).json({ error: "Error vectores" }); 
+  }
 };
 
 export const buscarPorRFID = async (req: Request, res: Response) => {
@@ -323,8 +376,6 @@ export const obtenerNotificaciones = async (req: Request, res: Response) => {
     const { id } = req.params;
 
     // 🔥 PASO 1: LIMPIEZA AUTOMÁTICA
-    // Borrar notificaciones que tengan más de 1 día de antigüedad (-1 day)
-    // Esto asegura que cada vez que abras la campanita, la basura vieja desaparezca sola.
     await db.execute({
         sql: `DELETE FROM notificaciones WHERE fecha < datetime('now', '-1 day')`,
         args: []

@@ -30,7 +30,7 @@ export const initDB = async () => {
     */
     
     // =====================================================================
-
+    
     // ========== 1. TABLA PERSONAS ==========
     await db.execute(`
       CREATE TABLE IF NOT EXISTS personas (
@@ -98,7 +98,7 @@ export const initDB = async () => {
       )
     `);
 
-    // ========== 4. TABLA SOLICITUDES VISITANTES ==========
+    // DENTRO DE initDB en solicitudes_visitantes
     await db.execute(`
       CREATE TABLE IF NOT EXISTS solicitudes_visitantes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,14 +106,14 @@ export const initDB = async () => {
         segundo_nombre TEXT,
         primer_apellido TEXT NOT NULL,
         segundo_apellido TEXT,
-        cedula TEXT NOT NULL UNIQUE,
+        cedula TEXT NOT NULL, -- 🚨 ELIMINADO EL UNIQUE AQUÍ PARA PERMITIR HISTORIAL
         correo TEXT NOT NULL,
         telefono TEXT NOT NULL,
         foto_base64 TEXT,
         vector_facial TEXT, 
         descripcion TEXT,
-        documento_base64 TEXT,  -- Aquí se guardará el PDF/JPG codificado
-        nombre_documento TEXT,  -- Aquí se guarda el nombre (e.g., "cedula.pdf")
+        documento_base64 TEXT,
+        nombre_documento TEXT,
         estado TEXT DEFAULT 'Pendiente' CHECK(estado IN ('Pendiente', 'Aprobado', 'Rechazado', 'Expirado')),
         razon_rechazo TEXT,
         persona_id INTEGER,
@@ -122,6 +122,11 @@ export const initDB = async () => {
         FOREIGN KEY(persona_id) REFERENCES personas(id) ON DELETE CASCADE
       )
     `);
+
+    // Crea un índice normal para que las búsquedas por cédula sean rápidas pero NO únicas
+    try {
+        await db.execute(`CREATE INDEX IF NOT EXISTS idx_cedula_visitante ON solicitudes_visitantes(cedula)`);
+    } catch(e) {}
 
     // ========== 5. TABLA ACCESOS ==========
     await db.execute(`
